@@ -22,10 +22,25 @@ from ashgauntlet.data import (
     ISSEN_FAMILIES,
     RECIPES,
     SKILLS,
+    STONES,
     craft_line,
     episode,
+    gear_bonus,
     next_enhance_cost,
     raise_line,
+)
+from ashgauntlet.sheets import (
+    body_card,
+    describe_body,
+    fighter_block,
+    gear_lines,
+    herb_lines,
+    issen_lines,
+    recipe_lines,
+    skill_lines,
+    soul_lines,
+    stone_lines,
+    workshop_intro,
 )
 from ashgauntlet.paths import bundle_root, user_root
 
@@ -113,14 +128,30 @@ def blit_lines(surface, font, lines, color, x, y, gap=2):
 
 
 class Button:
-    def __init__(self, rect, label, callback, enabled=True):
+    def __init__(self, rect, label, callback, enabled=True, info=None, quiet=False):
         self.rect = pygame.Rect(rect)
         self.label = label
         self.callback = callback
         self.enabled = enabled
+        self.info = info
+        self.quiet = quiet
 
     def draw(self, surface, font):
-        hovered = self.enabled and self.rect.collidepoint(pygame.mouse.get_pos())
+        hovered = self.rect.collidepoint(pygame.mouse.get_pos())
+        if self.quiet:
+            color = GOLD if hovered and self.enabled else (TEXT if self.enabled else (140, 130, 120))
+            image = font.render(self.label, True, color)
+            surface.blit(image, image.get_rect(midleft=(self.rect.x + 4, self.rect.centery)))
+            if hovered and self.enabled:
+                pygame.draw.line(
+                    surface,
+                    GOLD,
+                    (self.rect.x + 4, self.rect.bottom - 3),
+                    (self.rect.x + 4 + image.get_width(), self.rect.bottom - 3),
+                    2,
+                )
+            return
+        hovered = hovered and self.enabled
         fill = (120, 74, 48) if hovered else (70, 48, 36)
         if not self.enabled:
             fill = (48, 42, 40)
@@ -181,6 +212,9 @@ class Game:
         self.save = Save.load(self.save_path)
         self.confirm_new = False
         self.pending = None
+        self.pin = None
+        self.gear_scroll = 0
+        self.inspect_gid = None
         self.toast = ""
         self.toast_t = 0
         self.lines = []
@@ -252,6 +286,10 @@ class Game:
                     widget.callback()
                     return
             self.click(event.pos)
+        elif event.type == pygame.MOUSEWHEEL and self.mode == "workshop" and self.pending is None:
+            if pygame.mouse.get_pos()[0] >= 660:
+                cap = max(0, len(self.save.gear) - 7)
+                self.gear_scroll = max(0, min(cap, self.gear_scroll - event.y))
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
             if self.mode == "battle":
                 if self.aim:
@@ -318,17 +356,37 @@ class Game:
             "world": self.draw_world,
         }[self.mode]
         draw()
-        if self.toast_t > 0 and self.mode in ("battle", "deploy", "workshop"):
+        if self.toast_t > 0 and self.mode == "battle":
             bar = pygame.Rect(24, HEIGHT - 46, 860, 32)
             pygame.draw.rect(self.canvas, (48, 28, 24), bar, border_radius=6)
             self.canvas.blit(self.font.render(self.toast, True, GOLD), (36, HEIGHT - 42))
         pygame.display.flip()
 
-    def add_button(self, rect, label, callback, enabled=True):
-        button = Button(rect, label, callback, enabled)
+    def add_button(self, rect, label, callback, enabled=True, info=None, quiet=False):
+        button = Button(rect, label, callback, enabled, info=info, quiet=quiet)
         self.widgets.append(button)
         button.draw(self.canvas, self.font)
         return button
+
+    def info_at(self, pos):
+        for widget in reversed(self.widgets):
+            if widget.info and widget.rect.collidepoint(pos):
+                return widget.info
+        return None
+
+    def draw_card(self, rect, title, lines):
+        pygame.draw.rect(self.canvas, PANEL, rect, border_radius=12)
+        pygame.draw.rect(self.canvas, (224, 170, 120), rect, 2, border_radius=12)
+        self.canvas.blit(self.font_b.render(title, True, GOLD), (rect.x + 16, rect.y + 8))
+        y = rect.y + 34
+        bottom = rect.bottom - 8
+        step = self.font_sm.get_height() + 1
+        for line in lines:
+            for wrapped in wrap(self.font_sm, line, rect.width - 32):
+                if y + self.font_sm.get_height() > bottom:
+                    return
+                self.canvas.blit(self.font_sm.render(wrapped, True, TEXT), (rect.x + 16, y))
+                y += step
 
     def draw_title(self):
         self.canvas.blit(self.sprite("kairo"), (120, 250))
@@ -355,23 +413,25 @@ class Game:
         self.canvas.blit(self.font_lg.render("How a fight works", True, TEXT), (80, 48))
         lines = [
             "1. A bright diamond follows the pointer. That diamond is the tile you use.",
-            "2. Point it at a fighter's feet and click. Rings stay visible when pictures pile up. Blue tiles are steps. Kairo always has to go.",
-            "3. Red diamonds can be struck. Click the diamond on that enemy's tile, not the picture covering it.",
-            "4. The buttons on the right are skills, herbs, Issen, and Wait. Heal works on that fighter or on a friend on the next tile. A herb does too.",
-            "5. Issen means you only step and set it. The next sword, spear, or axe that swings at that fighter misses, and the attacker falls.",
+            "2. Point it at a fighter's feet. The right side reads health, skill points, attack, defense, move, skills, and experience. Click one of yours to give orders.",
+            "3. Red diamonds can be struck. Click the diamond on that enemy's tile, not the picture covering it. Point at them first if you want their numbers.",
+            "4. The buttons on the right are skills, herbs, Issen, and Wait. Point at a button to read it. Heal works on that fighter or on a friend on the next tile. A herb does too.",
+            "5. Issen means you only step and set it. The next sword, spear, or axe that swings from the next tile misses, and the attacker falls.",
             "6. Low, mid, and high ground are drawn as steps. A two-step gap blocks walking and striking.",
-            "7. After the fight, stones make gear and souls raise it. Nothing is bought with coins.",
+            "7. Ash and Bone are stones, not money. Pawns drop Ash. Spear fighters drop Bone. Stones make a new piece. Souls only raise a piece you already own. Point at either one in the workshop.",
             "8. If Kairo falls, the fight is lost. On the first map, Shio is the same once she arrives.",
         ]
-        y = 130
+        y = 120
         for line in lines:
-            y += blit_lines(self.canvas, self.font, wrap(self.font, line, 1000), TEXT, 80, y, 4) + 16
-        self.add_button((80, 640, 220, 48), "Back", lambda: self.set_mode("title"))
+            y += blit_lines(self.canvas, self.font, wrap(self.font, line, 1080), TEXT, 80, y, 3) + 12
+        self.add_button((980, 40, 220, 48), "Back", lambda: self.set_mode("title"))
 
     def set_mode(self, mode):
         self.mode = mode
         self.confirm_new = False
         self.pending = None
+        self.pin = None
+        self.inspect_gid = None
 
     def stop(self):
         self.running = False
@@ -436,7 +496,12 @@ class Game:
     def draw_deploy(self):
         ep = episode(self.ep_id)
         self.canvas.blit(self.font_lg.render(ep["name"], True, TEXT), (40, 24))
-        self.canvas.blit(self.font.render("Choose who walks out. Kairo is required.", True, MUTED), (40, 78))
+        self.canvas.blit(
+            self.font_sm.render("Point at a name to read them. Click it to change their kit. Kairo is required.", True, MUTED),
+            (40, 78),
+        )
+        if self.toast_t > 0:
+            self.canvas.blit(self.font_sm.render(self.toast, True, GOLD), (340, 36))
         self.canvas.blit(self.font_b.render("Going", True, ORANGE), (40, 120))
         y = 160
         for index, body_id in enumerate(self.order):
@@ -447,15 +512,25 @@ class Game:
         for body_id in self.save.roster:
             if body_id in self.order:
                 continue
-            self.add_button((40, y, 220, 40), BODIES[body_id]["name"], lambda b=body_id: self.add_deploy(b))
+            self.add_button(
+                (40, y, 220, 40),
+                BODIES[body_id]["name"],
+                lambda b=body_id: self.add_deploy(b),
+                info=body_card(self.save, body_id),
+            )
             y += 48
         self._draw_kit(ep)
         self.add_button((900, 650, 340, 48), "Start the fight", self.start_battle)
+        lines = self.info_at(pygame.mouse.get_pos())
+        if not lines:
+            focused = self.deploy_focus if self.deploy_focus in self.order else self.order[0]
+            lines = describe_body(self.save, focused)["details"]
+        self.draw_card(pygame.Rect(40, 488, 760, 220), "Reading", lines)
 
     def _deploy_row(self, body_id, index, y, going):
         name = BODIES[body_id]["name"]
         locked = body_id in episode(self.ep_id)["must"]
-        self.add_button((40, y, 210, 44), name, lambda b=body_id: self.focus(b))
+        self.add_button((40, y, 210, 44), name, lambda b=body_id: self.focus(b), info=body_card(self.save, body_id))
         if index > 0:
             self.add_button((260, y, 64, 44), "Up", lambda i=index: self.move_order(i, -1))
         if index < len(self.order) - 1:
@@ -494,34 +569,60 @@ class Game:
         body_id = self.deploy_focus if self.deploy_focus in self.order else self.order[0]
         self.deploy_focus = body_id
         body = BODIES[body_id]
-        panel = pygame.Rect(820, 24, 430, 600)
+        block = describe_body(self.save, body_id)
+        panel = pygame.Rect(820, 24, 430, 610)
         pygame.draw.rect(self.canvas, PANEL, panel, border_radius=12)
-        self.canvas.blit(self.sprite(body_id), (840, 40))
-        self.canvas.blit(self.font_b.render(body["name"], True, ORANGE), (980, 50))
-        self.canvas.blit(self.font_sm.render(body["family"].replace("_", " "), True, MUTED), (980, 82))
+        portrait = pygame.transform.smoothscale(self.sprite(body_id), (48, 72))
+        self.canvas.blit(portrait, (840, 40))
+        self.canvas.blit(self.font_b.render(body["name"], True, ORANGE), (900, 36))
+        self.canvas.blit(self.font_sm.render(body["family"].replace("_", " "), True, MUTED), (900, 64))
+        y = 112
+        for line in block["summary"]:
+            if y > 268:
+                break
+            y += blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, line, 390), TEXT, 840, y, 2)
         weapon = self.save.equipped(body_id, "weapon")
         armor = self.save.equipped(body_id, "armor")
         charm = self.save.equipped(body_id, "accessory")
-        self._cycle_row(200, "Weapon", self._gear_label(weapon), lambda b=body_id: self.cycle(b, "weapon", 1))
-        self._cycle_row(276, "Armor", self._gear_label(armor) if armor else "None", lambda b=body_id: self.cycle(b, "armor", 1))
-        self._cycle_row(352, "Charm", self._gear_label(charm) if charm else "None", lambda b=body_id: self.cycle(b, "accessory", 1))
+        self._cycle_row(
+            276,
+            "Weapon",
+            self._gear_label(weapon),
+            lambda b=body_id: self.cycle(b, "weapon", 1),
+            gear_lines(weapon.kind, weapon.plus, body["name"], self.save.souls) if weapon else ["No weapon."],
+        )
+        self._cycle_row(
+            346,
+            "Armor",
+            self._gear_label(armor) if armor else "None",
+            lambda b=body_id: self.cycle(b, "armor", 1),
+            gear_lines(armor.kind, armor.plus, body["name"], self.save.souls)
+            if armor
+            else ["No armor. Defense is only from their body."],
+        )
+        self._cycle_row(
+            416,
+            "Charm",
+            self._gear_label(charm) if charm else "None",
+            lambda b=body_id: self.cycle(b, "accessory", 1),
+            gear_lines(charm.kind, charm.plus, body["name"], self.save.souls)
+            if charm
+            else ["No charm."],
+        )
         slots = self.item_plan.setdefault(body_id, [None, None])
         for index in (0, 1):
             label = "Herb" if slots[index] == "herb" else "Empty"
             self.add_button(
-                (850, 440 + index * 52, 370, 44),
+                (850, 486 + index * 46, 370, 40),
                 f"Item {index + 1}: {label}",
                 lambda i=index, b=body_id: self.toggle_herb(b, i),
+                info=herb_lines(),
             )
         held = sum(slot == "herb" for plan in self.item_plan.values() for slot in plan)
         left = max(0, self.save.herbs - held)
         self.canvas.blit(
-            self.font_sm.render(f"Herbs left to hand out: {left}", True, MUTED),
-            (850, 552),
-        )
-        self.canvas.blit(
-            self.font_sm.render(f"Spots on this map: {len(ep['slots'])}", True, MUTED),
-            (850, 578),
+            self.font_sm.render(f"Herbs left to hand out: {left}. This map has room for {len(ep['slots'])}.", True, MUTED),
+            (850, 586),
         )
 
     def _gear_label(self, gear):
@@ -530,9 +631,9 @@ class Game:
         plus = f" +{gear.plus}" if gear.plus else ""
         return GEAR[gear.kind]["name"] + plus
 
-    def _cycle_row(self, y, title, value, callback):
+    def _cycle_row(self, y, title, value, callback, info=None):
         self.canvas.blit(self.font_sm.render(title, True, MUTED), (850, y))
-        self.add_button((850, y + 22, 370, 40), value, callback)
+        self.add_button((850, y + 22, 370, 40), value, callback, info=info)
 
     def cycle(self, body_id, slot, step):
         if slot == "weapon":
@@ -647,49 +748,91 @@ class Game:
     def leave_loss(self):
         self.mode = "world" if self.save.cleared else "title"
 
+    def toggle_pin(self, key):
+        self.pin = None if self.pin == key else key
+
     def draw_workshop(self):
         if self.assets.props.get("gauntlet"):
             self.canvas.blit(self.assets.props["gauntlet"], (40, 24))
-        self.canvas.blit(self.font_lg.render("Workshop", True, TEXT), (130, 36))
-        stone_line = "   ".join(f"{name} {self.save.stones.get(name, 0)}" for name in ("ash", "bone", "cinder", "void"))
-        self.canvas.blit(self.font.render(f"Souls {self.save.souls}", True, ORANGE), (40, 120))
-        self.canvas.blit(self.font.render(stone_line, True, TEXT), (40, 154))
-        self.canvas.blit(
-            self.font_sm.render("Stones make a piece. Souls raise it. A click asks before anything is spent.", True, MUTED),
-            (40, 190),
+        self.canvas.blit(self.font_lg.render("Workshop", True, TEXT), (130, 28))
+        if self.pending is None:
+            self.add_button((1000, 24, 240, 44), "Back to the road", self.to_world)
+        if self.toast_t > 0:
+            self.canvas.blit(self.font_sm.render(self.toast, True, GOLD), (130, 78))
+        self.add_button(
+            (40, 108, 200, 32),
+            f"Souls {self.save.souls}",
+            lambda: self.toggle_pin("souls"),
+            info=soul_lines(self.save.souls),
+            quiet=True,
         )
-        self.canvas.blit(self.font_b.render("Recipes", True, GOLD), (40, 230))
-        y = 270
+        x = 250
+        for stone_id in ("ash", "bone", "cinder", "void"):
+            have = self.save.stones.get(stone_id, 0)
+            self.add_button(
+                (x, 108, 180, 32),
+                f"{STONES[stone_id]['name']} {have}",
+                lambda key=stone_id: self.toggle_pin(key),
+                info=stone_lines(stone_id, have),
+                quiet=True,
+            )
+            x += 190
+        self.canvas.blit(self.font_b.render("Recipes", True, GOLD), (40, 156))
+        y = 196
         if not self.save.recipes:
             self.canvas.blit(self.font.render("None yet. They come off the dead.", True, MUTED), (40, y))
         for recipe_id in self.save.recipes:
             recipe = RECIPES[recipe_id]
-            cost = ", ".join(f"{amount} {name}" for name, amount in recipe["stones"].items())
+            cost = ", ".join(f"{amount} {STONES[name]['name']}" for name, amount in recipe["stones"].items())
             self.add_button(
-                (40, y, 560, 48),
+                (40, y, 580, 44),
                 f"Craft {recipe['name']} ({cost})",
                 lambda rid=recipe_id: self.ask_craft(rid),
                 enabled=self.pending is None and self.save.can_craft(recipe_id),
+                info=recipe_lines(recipe_id, self.save.stones, self.save.can_craft(recipe_id)),
             )
-            y += 58
-        self.canvas.blit(self.font_b.render("What you carry", True, GOLD), (680, 230))
-        y = 270
-        for gear in self.save.gear:
+            y += 52
+        self.canvas.blit(self.font_b.render("What you carry", True, GOLD), (680, 156))
+        visible = 7
+        cap = max(0, len(self.save.gear) - visible)
+        self.gear_scroll = max(0, min(self.gear_scroll, cap))
+        if cap:
+            self.canvas.blit(self.font_sm.render("Mouse wheel over this list to see the rest.", True, MUTED), (680, 188))
+        row_top = 214
+        for index, gear in enumerate(self.save.gear):
+            if index < self.gear_scroll:
+                continue
+            y = row_top + (index - self.gear_scroll) * 40
+            if y + 36 > 492:
+                break
             cost = next_enhance_cost(gear.kind, gear.plus)
-            plus = f" +{gear.plus}" if gear.plus else ""
+            meta = GEAR[gear.kind]
+            stat = "attack" if meta["slot"] == "weapon" else "defense"
+            bonus = gear_bonus(gear.kind, gear.plus)
+            plus = f"+{gear.plus}"
             owner = BODIES[gear.owner]["name"] if gear.owner in BODIES else "spare"
             if cost is None:
-                label = f"{GEAR[gear.kind]['name']}{plus}  ·  {owner}  ·  max"
+                label = f"{meta['name']} {plus}  ·  {owner}  ·  {stat} +{bonus}  ·  max"
                 enabled = False
             else:
-                label = f"{GEAR[gear.kind]['name']}{plus}  ·  {owner}  ·  {cost} souls"
+                label = f"{meta['name']} {plus}  ·  {owner}  ·  {stat} +{bonus}  ·  {cost} souls"
                 enabled = self.save.souls >= cost
-            self.add_button((680, y, 560, 42), label, lambda uid=gear.uid: self.ask_raise(uid), enabled=self.pending is None and enabled)
-            y += 48
-            if y > 600:
-                break
+            self.add_button(
+                (680, y, 560, 36),
+                label,
+                lambda uid=gear.uid: self.ask_raise(uid),
+                enabled=self.pending is None and enabled,
+                info=gear_lines(gear.kind, gear.plus, None if owner == "spare" else owner, self.save.souls),
+            )
         if self.pending is None:
-            self.add_button((40, 650, 280, 48), "Back to the road", self.to_world)
+            lines = self.info_at(pygame.mouse.get_pos())
+            if lines is None and self.pin == "souls":
+                lines = soul_lines(self.save.souls)
+            elif lines is None and self.pin in STONES:
+                lines = stone_lines(self.pin, self.save.stones.get(self.pin, 0))
+            elif lines is None:
+                lines = workshop_intro()
+            self.draw_card(pygame.Rect(24, 504, 1232, 200), "Reading", lines)
         else:
             self.draw_pending()
 
@@ -764,6 +907,14 @@ class Game:
         else:
             banner = "Kureha is burning."
         self.canvas.blit(self.font.render(banner, True, MUTED), (60, 96))
+        if self.save.cleared:
+            ash = self.save.stones.get("ash", 0)
+            bone = self.save.stones.get("bone", 0)
+            held = (
+                f"You hold {self.save.souls} souls, {ash} Ash, {bone} Bone. "
+                "Pawns drop Ash. Spear fighters drop Bone. Stones make gear. Souls only raise it."
+            )
+            blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, held, 1100), TEXT, 60, 132, 2)
         for index, ep in enumerate(EPISODES):
             locked = ep["id"] > self.save.next_episode
             status = "Cleared" if ep["id"] in self.save.cleared else ("Locked" if locked else "Next")
@@ -854,7 +1005,12 @@ class Game:
             return
         if kind == "unit" and data.side == "player" and data.alive and not data.acted:
             self.sel = data.gid
+            self.inspect_gid = None
             self.preview = data.pos
+            return
+        if kind == "unit" and data.side == "player" and data.alive and data.acted:
+            self.inspect_gid = data.gid
+            self.say("They already acted. Their numbers stay on the right.")
             return
         if kind == "unit" and data.side == "enemy":
             self.try_attack(data)
@@ -863,7 +1019,12 @@ class Game:
             occ = battle.unit_at(data)
             if occ and occ.side == "player" and occ.alive and not occ.acted:
                 self.sel = occ.gid
+                self.inspect_gid = None
                 self.preview = occ.pos
+                return
+            if occ and occ.side == "player" and occ.alive and occ.acted:
+                self.inspect_gid = occ.gid
+                self.say("They already acted. Their numbers stay on the right.")
                 return
             if occ and occ.side == "enemy":
                 self.try_attack(occ)
@@ -1014,7 +1175,13 @@ class Game:
             else:
                 label = ("Low ground", "Mid ground", "High ground")[self.battle.height(spot)]
             if who:
-                label = f"{who}  ·  {label}"
+                person = picked[1]
+                attack = self.battle.attack_power(person)
+                defense = self.battle.defense_power(person)
+                label = (
+                    f"{who}  ·  health {max(person.hp, 0)}/{person.max_hp}"
+                    f"  ·  attack {attack}  ·  defense {defense}  ·  {label}"
+                )
             tag = self.font.render(label, True, TEXT)
             self.canvas.blit(tag, (24, 72))
         self.draw_panel()
@@ -1224,64 +1391,135 @@ class Game:
             return ("unit", occ)
         return ("tile", tile)
 
+    def shown_fighter(self):
+        battle = self.battle
+        if battle is None:
+            return None
+        mx, my = pygame.mouse.get_pos()
+        if mx < 900:
+            picked = self.pick(mx, my)
+            if picked is not None and picked[0] == "unit":
+                return picked[1]
+        actor = self.selected()
+        if actor is not None:
+            return actor
+        if self.inspect_gid is not None:
+            unit = battle.unit_by_gid(self.inspect_gid)
+            if unit is not None and self.visible(unit):
+                return unit
+        return None
+
+    def fighter_sheet(self, unit):
+        later = []
+        if unit.id in BODIES:
+            later = [(skill_id, needed) for skill_id, needed in BODIES[unit.id]["skills"] if skill_id not in unit.skills]
+        strike = None
+        in_reach = None
+        actor_name = None
+        actor = self.selected()
+        if actor is not None and unit.gid != actor.gid and unit.side == "enemy":
+            actor_name = actor.name
+            preview = self.preview if self.preview in self._stand() else actor.pos
+            legal = {target.gid for target in self.battle.attack_targets(actor, preview)}
+            if unit.gid in legal:
+                strike = self.battle.preview_damage(actor, unit)
+                in_reach = True
+            else:
+                in_reach = False
+        return fighter_block(
+            unit,
+            later=later,
+            strike=strike,
+            in_reach=in_reach,
+            actor_name=actor_name,
+            with_loadout=True,
+        )
+
     def draw_panel(self):
         pygame.draw.rect(self.canvas, PANEL, (900, 0, 380, HEIGHT))
         battle = self.battle
         phase = "Your turn" if battle.phase == "player" else "Enemy turn"
-        self.canvas.blit(self.font_b.render(f"{battle.title}", True, TEXT), (920, 16))
-        self.canvas.blit(self.font.render(f"{phase}   ·   round {battle.rnd}", True, ORANGE), (920, 48))
-        unit = self.selected()
+        self.canvas.blit(self.font_b.render(battle.title, True, TEXT), (920, 12))
+        self.canvas.blit(self.font.render(f"{phase}   ·   round {battle.rnd}", True, ORANGE), (920, 40))
+        actor = self.selected()
+        unit = self.shown_fighter()
         if unit is None:
-            help_text = "Point the diamond at a fighter's feet and click. A gold dot means the fight ends if they fall."
-            y = 100
-            y += blit_lines(self.canvas, self.font, wrap(self.font, help_text, 340), TEXT, 920, y) + 8
+            help_text = (
+                "Point at a fighter's feet. This side reads health, skill points, attack, defense, "
+                "move, skills, and experience. Click one of yours to give orders. A gold dot means the fight ends if they fall."
+            )
+            blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, help_text, 340), TEXT, 920, 84, 3)
+            self._sheet_y = None
+            self._sheet = None
         else:
-            self.canvas.blit(self.font_b.render(unit.name, True, ORANGE if unit.side == "player" else TEXT), (920, 92))
-            self.canvas.blit(self.font_sm.render(unit.weapon_name or "No weapon", True, MUTED), (920, 120))
-            self._bar(920, 150, 340, 16, max(unit.hp, 0) / unit.max_hp, HP_COLOR, f"HP {max(unit.hp, 0)}/{unit.max_hp}")
-            sp_frac = 0 if unit.max_sp == 0 else unit.sp / unit.max_sp
-            self._bar(920, 176, 340, 16, sp_frac, SP_COLOR, f"SP {unit.sp}/{unit.max_sp}")
-            atk = battle.attack_power(unit)
-            defense = battle.defense_power(unit)
-            extra = f"   {unit.mode}" if unit.mode else ""
-            issen = "   ISSEN" if unit.issen else ""
-            self.canvas.blit(self.font_sm.render(f"ATK {atk}   DEF {defense}   MOV {unit.mov}{extra}{issen}", True, TEXT), (920, 202))
-            if unit.lose_flag or unit.id == "kairo":
-                self.canvas.blit(self.font_sm.render("If they fall, the march ends.", True, GOLD), (920, 224))
-            help_text = "Point the diamond at a foot ring. Blue steps. Red strikes."
-            if self.aim:
-                help_text = "Click the bright diamond. Right-click cancels."
-            blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, help_text, 340), MUTED, 920, 248)
-        self.canvas.blit(self.font_sm.render("Recent", True, MUTED), (920, 300))
-        for index, line in enumerate(battle.log[-5:]):
-            blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, line, 340)[:1], TEXT, 920, 324 + index * 22)
-        if unit and battle.phase == "player":
-            preview = self.preview if self.preview in self._stand() else unit.pos
-            y = 450
-            self.add_button((920, y, 160, 36), "Attack", lambda: self.set_aim(("attack",)))
-            self.add_button((1090, y, 160, 36), "Wait", lambda: self.act(preview, {"type": "wait"}))
-            y += 42
-            if unit.weapon_family in ISSEN_FAMILIES:
-                self.add_button((920, y, 330, 36), "Issen", lambda: self.act(preview, {"type": "issen"}))
-                y += 42
-            for skill_id in unit.skills:
-                skill = SKILLS[skill_id]
-                ready = battle.skill_options(unit, preview, skill_id)["ok"]
+            block = self.fighter_sheet(unit)
+            color = ORANGE if unit.side == "player" else TEXT
+            self.canvas.blit(self.font_b.render(block["title"], True, color), (920, 72))
+            hp_frac = 0 if unit.max_hp <= 0 else max(unit.hp, 0) / unit.max_hp
+            sp_frac = 0 if unit.max_sp <= 0 else unit.sp / unit.max_sp
+            self._bar(920, 104, 340, 16, hp_frac, HP_COLOR, f"Health {max(unit.hp, 0)}/{unit.max_hp}")
+            self._bar(920, 126, 340, 16, sp_frac, SP_COLOR, f"Skill points {unit.sp}/{unit.max_sp}")
+            y = 150
+            for line in block["summary"]:
+                if line.startswith("Health ") or line.startswith("Skill points "):
+                    continue
+                y += blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, line, 340), TEXT, 920, y, 2)
+            self._sheet_y = y + 4
+            self._sheet = block
+        if actor and battle.phase == "player":
+            preview = self.preview if self.preview in self._stand() else actor.pos
+            y = 478
+            self.add_button((920, y, 160, 34), "Attack", lambda: self.set_aim(("attack",)))
+            self.add_button((1090, y, 160, 34), "Wait", lambda: self.act(preview, {"type": "wait"}))
+            y += 38
+            if actor.weapon_family in ISSEN_FAMILIES:
                 self.add_button(
-                    (920, y, 330, 36),
+                    (920, y, 330, 34),
+                    "Issen",
+                    lambda: self.act(preview, {"type": "issen"}),
+                    info=issen_lines(),
+                )
+                y += 38
+            for skill_id in actor.skills:
+                skill = SKILLS[skill_id]
+                ready = battle.skill_options(actor, preview, skill_id)["ok"]
+                self.add_button(
+                    (920, y, 330, 34),
                     f"{skill['name']}  {skill['sp']} SP",
                     lambda sid=skill_id: self.use_skill(sid),
                     enabled=ready,
+                    info=skill_lines(skill_id),
                 )
-                y += 40
-            for slot, item in enumerate(unit.items):
+                y += 38
+            for slot, item in enumerate(actor.items):
                 if item != "herb":
                     continue
-                self.add_button((920, y, 330, 36), f"Herb {slot + 1}", lambda s=slot: self.set_aim(("item", s)))
-                y += 40
+                self.add_button(
+                    (920, y, 330, 34),
+                    f"Herb {slot + 1}",
+                    lambda s=slot: self.set_aim(("item", s)),
+                    info=herb_lines(),
+                )
+                y += 38
         remaining = len(battle.unacted_players()) if battle.phase == "player" else 0
         label = f"End phase ({remaining} left)" if remaining else "End phase"
         self.add_button((920, 668, 330, 40), label, self.end_phase, enabled=battle.phase == "player" and not battle.outcome)
+        if self._sheet is not None and unit is not None:
+            hovered = self.info_at(pygame.mouse.get_pos())
+            details = hovered if hovered else self._sheet["details"]
+            y = self._sheet_y
+            for line in details:
+                wrapped = wrap(self.font_sm, line, 340)
+                if y + len(wrapped) * (self.font_sm.get_height() + 2) > 468:
+                    break
+                y += blit_lines(self.canvas, self.font_sm, wrapped, MUTED, 920, y, 2)
+            if actor is not None and unit.gid != actor.gid and y <= 450:
+                self.canvas.blit(self.font_sm.render(f"Orders stay with {actor.name}.", True, GOLD), (920, 452))
+            elif self.aim and y <= 450:
+                self.canvas.blit(self.font_sm.render("Click the bright diamond. Right-click cancels.", True, GOLD), (920, 452))
+            for widget in self.widgets:
+                if widget.rect.x >= 900:
+                    widget.draw(self.canvas, self.font)
 
     def set_aim(self, aim):
         if self.selected() is None:

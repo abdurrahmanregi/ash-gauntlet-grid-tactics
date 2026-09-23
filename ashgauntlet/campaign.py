@@ -12,6 +12,7 @@ from ashgauntlet.data import (
     GEAR,
     RECIPES,
     SKILLS,
+    STONES,
     episode,
     gear_bonus,
     grid_from_rows,
@@ -208,9 +209,16 @@ class Save:
             self.cleared.append(episode_id)
         self.next_episode = max(self.next_episode, episode_id + 1)
         if battle.loot_souls:
-            notes.append(f"Souls kept: {battle.loot_souls}.")
+            notes.append(
+                f"Souls kept: {battle.loot_souls}. Souls only raise a piece you already own."
+            )
         if battle.loot_stones:
-            notes.append("Stones: " + ", ".join(battle.loot_stones) + ".")
+            names = [STONES[stone]["name"] if stone in STONES else stone for stone in battle.loot_stones]
+            notes.append(
+                "Stones kept: "
+                + ", ".join(names)
+                + ". Stones make a new piece in the workshop. Pawns drop Ash. Spear fighters drop Bone."
+            )
         return notes
 
 
@@ -240,6 +248,12 @@ def default_items(save: Save, order: list[str]) -> dict:
     return plan
 
 
+def _piece_name(gear: Gear | None) -> str:
+    if gear is None:
+        return ""
+    return f"{GEAR[gear.kind]['name']} +{gear.plus}"
+
+
 def _skills_for(body_id: str, level: int, gears: list[Gear | None]) -> list[str]:
     known = []
     for skill_id, needed in BODIES[body_id]["skills"]:
@@ -265,7 +279,6 @@ def materialize(save: Save, body_id: str, pos, lose_flag: bool = False) -> Unit:
     armor = save.equipped(body_id, "armor")
     charm = save.equipped(body_id, "accessory")
     weapon_meta = GEAR[weapon.kind] if weapon else None
-    plus = f" +{weapon.plus}" if weapon and weapon.plus else ""
     return Unit(
         id=body_id,
         name=body["name"],
@@ -283,7 +296,17 @@ def materialize(save: Save, body_id: str, pos, lose_flag: bool = False) -> Unit:
         weapon_atk=gear_bonus(weapon.kind, weapon.plus) if weapon else 0,
         armor_def=gear_bonus(armor.kind, armor.plus) if armor else 0,
         acc_def=gear_bonus(charm.kind, charm.plus) if charm else 0,
-        weapon_name=(weapon_meta["name"] + plus) if weapon_meta else "Empty hands",
+        weapon_name=_piece_name(weapon) or "Empty hands",
+        armor_name=_piece_name(armor),
+        charm_name=_piece_name(charm),
+        weapon_kind=weapon.kind if weapon else None,
+        weapon_plus=weapon.plus if weapon else 0,
+        armor_kind=armor.kind if armor else None,
+        armor_plus=armor.plus if armor else 0,
+        charm_kind=charm.kind if charm else None,
+        charm_plus=charm.plus if charm else 0,
+        level=record["level"],
+        exp=record["exp"],
         skills=_skills_for(body_id, record["level"], [weapon, armor, charm]),
         lose_flag=lose_flag or body_id == "kairo",
     )
@@ -306,7 +329,13 @@ def fresh_unit(body_id: str, pos, lose_flag: bool = False) -> Unit:
         defn=body["defn"],
         mov=body["mov"],
         weapon_family=meta["family"],
-        weapon_name=meta["name"],
+        weapon_name=f"{meta['name']} +0",
+        weapon_kind=body["start_weapon"],
+        weapon_plus=0,
+        armor_name="",
+        charm_name="",
+        level=1,
+        exp=0,
         skills=_skills_for(body_id, 1, []),
         lose_flag=lose_flag or body_id == "kairo",
     )

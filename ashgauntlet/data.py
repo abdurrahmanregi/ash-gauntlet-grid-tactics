@@ -182,6 +182,29 @@ GEAR = {
     },
 }
 
+STONES = {
+    "ash": {
+        "name": "Ash",
+        "source": "A Pawn drops one Ash when they fall.",
+        "use": "Every recipe in the workshop spends Ash.",
+    },
+    "bone": {
+        "name": "Bone",
+        "source": "A Bushi, the spear fighter, drops one Bone when they fall.",
+        "use": "Line Spear and Paper Charm need Bone as well as Ash.",
+    },
+    "cinder": {
+        "name": "Cinder",
+        "source": "Cinder is not dropped on the first two maps.",
+        "use": "Nothing you can make on this march spends Cinder.",
+    },
+    "void": {
+        "name": "Void",
+        "source": "Void is not dropped on the first two maps.",
+        "use": "Nothing you can make on this march spends Void.",
+    },
+}
+
 RECIPES = {
     "ash_blade": {
         "name": "Ash Blade",
