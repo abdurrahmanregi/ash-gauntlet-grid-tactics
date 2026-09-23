@@ -29,7 +29,7 @@ SKILLS = {
         "sp": 10,
         "kind": "heal",
         "ratio": 0.40,
-        "blurb": "Heal an adjacent ally for 40% of your health.",
+        "blurb": "Heal yourself, or an ally on the next tile, for 40% of your health.",
     },
     "heal_aura": {
         "name": "Wide Heal",

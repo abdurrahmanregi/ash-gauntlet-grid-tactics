@@ -94,7 +94,7 @@ A body has 2 or 3 personal skills. They are learned by level or by a story flag 
 | Shockwave, two or four directions | 28 |
 | Element shot, one target | 14 |
 | Status arrow | 12 |
-| Heal one adjacent ally for 40% of the caster’s max HP | 10 |
+| Heal oneself, or one adjacent ally, for 40% of the caster’s max HP | 10 |
 | Heal allies within 2 tiles for 25% | 22 |
 | Full-map heal for 20% | 40 |
 | Steal | 8 |

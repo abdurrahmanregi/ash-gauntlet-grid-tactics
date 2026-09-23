@@ -47,6 +47,24 @@ CEDAR = {
     1: ((108, 94, 68), (74, 64, 46), (90, 78, 56)),
     2: ((148, 144, 134), (98, 96, 90), (122, 118, 110)),
 }
+def closest_diamond(mx, my, diamonds):
+    """Return the tile whose ground diamond contains the point.
+
+    diamonds is (tile, center_x, center_y). A taller picture must not decide
+    the click: the front fighter covers the tiles behind them.
+    """
+    best = None
+    best_key = None
+    for tile, cx, cy in diamonds:
+        dist = abs(mx - cx) / HW + abs(my - cy) / HH
+        if dist <= 1:
+            key = (dist, -(tile[0] + tile[1]))
+            if best_key is None or key < best_key:
+                best = tile
+                best_key = key
+    return best
+
+
 FALLBACK_COLORS = {
     "kairo": (214, 122, 64),
     "shio": (226, 198, 164),
@@ -316,7 +334,7 @@ class Game:
         sub = self.font_lg.render("TACTICS", True, ORANGE)
         self.canvas.blit(title, (460, 150))
         self.canvas.blit(sub, (460, 214))
-        blurb = "Click your fighters. Click a blue tile. Click a red enemy."
+        blurb = "Aim the diamond at their feet. Overlapping pictures do not take the click."
         self.canvas.blit(self.font.render(blurb, True, MUTED), (460, 280))
         self.canvas.blit(self.font_sm.render("v0.0.1  ·  the first march", True, MUTED), (460, 314))
         label = "Erase the saved march?" if self.confirm_new else "Begin the march"
@@ -333,10 +351,10 @@ class Game:
     def draw_help(self):
         self.canvas.blit(self.font_lg.render("How a fight works", True, TEXT), (80, 48))
         lines = [
-            "1. Click one of your fighters. Kairo always has to go.",
-            "2. Blue tiles are where that fighter can walk. Click one.",
-            "3. Red means a strike is possible. Click that enemy.",
-            "4. The buttons on the right are skills, herbs, Issen, and Wait.",
+            "1. A bright diamond follows the pointer. That diamond is the tile you use.",
+            "2. Point it at a fighter's feet and click. Rings stay visible when pictures pile up. Blue tiles are steps. Kairo always has to go.",
+            "3. Red diamonds can be struck. Click the diamond on that enemy's tile, not the picture covering it.",
+            "4. The buttons on the right are skills, herbs, Issen, and Wait. Heal works on that fighter or on a friend on the next tile. A herb does too.",
             "5. Issen means you only step and set it. The next sword, spear, or axe that swings at that fighter misses, and the attacker falls.",
             "6. Low, mid, and high ground are drawn as steps. A two-step gap blocks walking and striking.",
             "7. After the fight, stones make gear and souls raise it. Nothing is bought with coins.",
@@ -904,16 +922,26 @@ class Game:
         preview = self.preview or unit.pos
         if skill["kind"] in ("mode", "nova", "heal_aura", "heal_all"):
             self.act(preview, {"type": "skill", "skill": skill_id})
-        else:
-            self.aim = ("skill", skill_id)
-            self.say(skill["blurb"])
+            return
+        options = self.battle.skill_options(unit, preview, skill_id)
+        if skill["kind"] == "heal" and options["gids"] == [unit.gid]:
+            self.act(preview, {"type": "skill", "skill": skill_id, "target": unit.gid})
+            return
+        self.aim = ("skill", skill_id)
+        self.say(skill["blurb"])
 
     def draw_battle(self):
         if self.battle is None:
             return
         self.draw_map()
         self.draw_highlights()
+        mx, my = pygame.mouse.get_pos()
+        picked = self.pick(mx, my) if mx < 900 else None
         self.draw_units()
+        self.draw_range_marks()
+        hot = picked[1].gid if picked is not None and picked[0] == "unit" else None
+        self.draw_foot_marks(hot)
+        self.draw_cursor(picked)
         for item in self.floaters:
             image = self.font_b.render(item["text"], True, GOLD if item["text"].startswith("+") or item["text"] == "Miss" else (255, 220, 210))
             self.canvas.blit(image, image.get_rect(center=(item["x"], item["y"])))
@@ -922,22 +950,23 @@ class Game:
             rect = banner.get_rect(center=(450, 36))
             pygame.draw.rect(self.canvas, (20, 16, 14), rect.inflate(24, 12), border_radius=8)
             self.canvas.blit(banner, rect)
-        mx, my = pygame.mouse.get_pos()
-        if mx < 900:
-            picked = self.pick(mx, my)
-            if picked is not None:
-                if picked[0] == "tile":
-                    spot = picked[1]
-                    blocked = spot in self.battle.blocked
-                else:
-                    spot = picked[1].pos
-                    blocked = False
-                if blocked:
-                    label = "Blocked"
-                else:
-                    label = ("Low ground", "Mid ground", "High ground")[self.battle.height(spot)]
-                tag = self.font.render(label, True, TEXT)
-                self.canvas.blit(tag, (24, 72))
+        if picked is not None:
+            if picked[0] == "tile":
+                spot = picked[1]
+                who = ""
+                blocked = spot in self.battle.blocked
+            else:
+                spot = picked[1].pos
+                who = picked[1].name
+                blocked = False
+            if blocked:
+                label = "Blocked"
+            else:
+                label = ("Low ground", "Mid ground", "High ground")[self.battle.height(spot)]
+            if who:
+                label = f"{who}  ·  {label}"
+            tag = self.font.render(label, True, TEXT)
+            self.canvas.blit(tag, (24, 72))
         self.draw_panel()
 
     def origin(self):
@@ -1021,6 +1050,51 @@ class Game:
             for target in self.battle.attack_targets(unit, preview):
                 self.paint(target.pos, (210, 72, 64, 130))
 
+    def marked_tiles(self):
+        unit = self.selected()
+        if unit is None or self.battle.phase != "player":
+            return []
+        stand = self._stand()
+        preview = self.preview if self.preview in stand else unit.pos
+        marks = [(tile, (120, 186, 240), 2) for tile in stand]
+        marks.append((preview, (240, 210, 120), 3))
+        if self.aim and self.aim[0] == "skill":
+            options = self.battle.skill_options(unit, preview, self.aim[1])
+            marks.extend((tile, (240, 210, 110), 3) for tile in options["tiles"])
+        elif self.aim and self.aim[0] == "item":
+            for gid in self.battle.item_targets(unit, preview, self.aim[1]):
+                target = self.battle.unit_by_gid(gid)
+                if target:
+                    marks.append((target.pos, (120, 210, 150), 3))
+        else:
+            for target in self.battle.attack_targets(unit, preview):
+                marks.append((target.pos, (230, 96, 86), 3))
+        return marks
+
+    def draw_range_marks(self):
+        for tile, color, width in self.marked_tiles():
+            top, _lift, _cx, _cy = self.tile_poly(*tile)
+            pygame.draw.polygon(self.canvas, color, top, width)
+
+    def draw_cursor(self, picked):
+        if picked is None:
+            return
+        spot = picked[1].pos if picked[0] == "unit" else picked[1]
+        top, _lift, _cx, _cy = self.tile_poly(*spot)
+        color = (255, 244, 210)
+        for tile, mark_color, _width in self.marked_tiles():
+            if tile == spot:
+                color = mark_color
+                break
+        pygame.draw.polygon(self.canvas, color, top, 4)
+        if picked[0] != "unit":
+            return
+        name = self.font_sm.render(picked[1].name, True, TEXT)
+        rect = name.get_rect(midbottom=(top[0][0], top[0][1] - 6))
+        rect.clamp_ip(pygame.Rect(8, 8, 884, HEIGHT - 16))
+        pygame.draw.rect(self.canvas, (20, 16, 14), rect.inflate(12, 6), border_radius=4)
+        self.canvas.blit(name, rect)
+
     def cells(self):
         battle = self.battle
         for total in range(battle.w + battle.h - 1):
@@ -1047,41 +1121,58 @@ class Game:
         units = [unit for unit in self.battle.units if self.visible(unit)]
         units.sort(key=lambda unit: sum(self.draw_xy(unit)))
         for unit in units:
-            cx, cy = self.foot(unit)
-            color = ORANGE if unit.side == "player" else (150, 110, 190)
-            pygame.draw.ellipse(self.canvas, (*color, 180) if False else color, (cx - 16, cy - 8, 32, 12))
-            image = self.sprite(unit.sprite)
-            rect = image.get_rect(midbottom=(cx, cy))
-            self.canvas.blit(image, rect)
-            if unit.issen and self.assets.fx.get("issen"):
-                flash = self.assets.fx["issen"]
-                self.canvas.blit(flash, flash.get_rect(center=(cx, rect.top + 10)))
-            elif unit.issen:
-                pygame.draw.arc(self.canvas, (255, 255, 255), (cx - 18, rect.top, 36, 24), 0.4, 2.7, 3)
-            frac = 0 if unit.max_hp <= 0 else max(0, unit.hp) / unit.max_hp
-            bar = pygame.Rect(cx - 20, rect.top - 10, 40, 5)
-            pygame.draw.rect(self.canvas, (20, 16, 14), bar)
-            pygame.draw.rect(self.canvas, HP_COLOR, (bar.x, bar.y, int(40 * frac), 5))
-            if unit.lose_flag or unit.id == "kairo":
-                pygame.draw.circle(self.canvas, GOLD, (cx, rect.top - 16), 4)
+            self.draw_one(unit)
 
-    def pick(self, mx, my):
-        tile = None
+    def draw_one(self, unit):
+        cx, cy = self.foot(unit)
+        color = ORANGE if unit.side == "player" else (150, 110, 190)
+        pygame.draw.ellipse(self.canvas, color, (cx - 16, cy - 8, 32, 12))
+        image = self.sprite(unit.sprite)
+        rect = image.get_rect(midbottom=(cx, cy))
+        self.canvas.blit(image, rect)
+        if unit.issen and self.assets.fx.get("issen"):
+            flash = self.assets.fx["issen"]
+            self.canvas.blit(flash, flash.get_rect(center=(cx, rect.top + 10)))
+        elif unit.issen:
+            pygame.draw.arc(self.canvas, (255, 255, 255), (cx - 18, rect.top, 36, 24), 0.4, 2.7, 3)
+        frac = 0 if unit.max_hp <= 0 else max(0, unit.hp) / unit.max_hp
+        bar = pygame.Rect(cx - 20, rect.top - 10, 40, 5)
+        pygame.draw.rect(self.canvas, (20, 16, 14), bar)
+        pygame.draw.rect(self.canvas, HP_COLOR, (bar.x, bar.y, int(40 * frac), 5))
+        if unit.lose_flag or unit.id == "kairo":
+            pygame.draw.circle(self.canvas, GOLD, (cx, rect.top - 16), 4)
+
+    def draw_foot_marks(self, hot_gid):
+        for unit in self.battle.units:
+            if not self.visible(unit):
+                continue
+            cx, cy = self.foot(unit)
+            hot = unit.gid == hot_gid
+            color = (255, 236, 200) if hot else (ORANGE if unit.side == "player" else (220, 130, 140))
+            radius = 8 if hot else 5
+            pygame.draw.circle(self.canvas, (20, 16, 14), (int(cx), int(cy)), radius + 2, 2)
+            pygame.draw.circle(self.canvas, color, (int(cx), int(cy)), radius, 2)
+
+    def tile_at(self, mx, my):
+        diamonds = []
         for x, y in self.cells():
             _top, lift, cx, cy = self.tile_poly(x, y)
-            if abs(mx - cx) / HW + abs(my - (cy - lift)) / HH <= 1.05:
-                tile = (x, y)
-        unit_hit = None
-        for unit in sorted((u for u in self.battle.units if self.visible(u)), key=lambda u: sum(self.draw_xy(u))):
-            image = self.sprite(unit.sprite)
-            rect = image.get_rect(midbottom=self.foot(unit))
-            if rect.collidepoint(mx, my):
-                unit_hit = unit
-        if unit_hit:
-            return ("unit", unit_hit)
-        if tile:
-            return ("tile", tile)
-        return None
+            diamonds.append(((x, y), cx, cy - lift))
+        return closest_diamond(mx, my, diamonds)
+
+    def pick(self, mx, my):
+        # Pictures are taller than a tile, so the body in front covers the
+        # fighter and the attack tile behind it. The click follows the ground
+        # diamond and ignores the pictures.
+        if self.battle is None:
+            return None
+        tile = self.tile_at(mx, my)
+        if tile is None:
+            return None
+        occ = self.battle.unit_at(tile)
+        if occ is not None and self.visible(occ):
+            return ("unit", occ)
+        return ("tile", tile)
 
     def draw_panel(self):
         pygame.draw.rect(self.canvas, PANEL, (900, 0, 380, HEIGHT))
@@ -1091,7 +1182,7 @@ class Game:
         self.canvas.blit(self.font.render(f"{phase}   ·   round {battle.rnd}", True, ORANGE), (920, 48))
         unit = self.selected()
         if unit is None:
-            help_text = "Click one of your fighters. A gold dot means the fight ends if they fall."
+            help_text = "Point the diamond at a fighter's feet and click. A gold dot means the fight ends if they fall."
             y = 100
             y += blit_lines(self.canvas, self.font, wrap(self.font, help_text, 340), TEXT, 920, y) + 8
         else:
@@ -1107,9 +1198,9 @@ class Game:
             self.canvas.blit(self.font_sm.render(f"ATK {atk}   DEF {defense}   MOV {unit.mov}{extra}{issen}", True, TEXT), (920, 202))
             if unit.lose_flag or unit.id == "kairo":
                 self.canvas.blit(self.font_sm.render("If they fall, the march ends.", True, GOLD), (920, 224))
-            help_text = "Blue is a step. The bright tile is where they will stand. Red can be struck."
+            help_text = "Point the diamond at a foot ring. Blue steps. Red strikes."
             if self.aim:
-                help_text = "Click a highlighted fighter or tile. Right-click cancels."
+                help_text = "Click the bright diamond. Right-click cancels."
             blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, help_text, 340), MUTED, 920, 248)
         self.canvas.blit(self.font_sm.render("Recent", True, MUTED), (920, 300))
         for index, line in enumerate(battle.log[-5:]):

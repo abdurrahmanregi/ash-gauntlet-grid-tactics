@@ -62,6 +62,9 @@ def choose(battle, unit):
 def _choose_shio(battle, unit, stand, foes, allies):
     if "heal_one" in unit.skills and unit.sp >= SKILLS["heal_one"]["sp"]:
         best = None
+        if unit.hp < unit.max_hp:
+            missing = unit.max_hp - unit.hp
+            best = (missing, unit.pos, unit)
         for dest in stand:
             for ally in allies:
                 if ally.hp >= ally.max_hp:

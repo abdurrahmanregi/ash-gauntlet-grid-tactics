@@ -173,6 +173,13 @@ class RuleTests(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(ally.hp, 11)
 
+        hurt = fighter(id="shio", name="Shio", pos=(0, 0), skills=["heal_one"], sp=10, max_hp=18, hp=10)
+        battle = make([hurt])
+        self.assertIn(hurt.gid, battle.skill_options(hurt, hurt.pos, "heal_one")["gids"])
+        _events, err = battle.player_act(hurt.gid, hurt.pos, {"type": "skill", "skill": "heal_one", "target": hurt.gid})
+        self.assertIsNone(err)
+        self.assertEqual(hurt.hp, 17)
+
         hero = fighter(pos=(0, 0), hp=10, max_hp=30, items=["herb", None])
         battle = make([hero])
         battle.player_act(hero.gid, hero.pos, {"type": "item", "slot": 0, "target": hero.gid})

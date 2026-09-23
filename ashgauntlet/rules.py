@@ -372,9 +372,10 @@ class Battle:
             ok = any(self.line_targets(unit, pos, d, skill["length"]) for d in ORTHO)
         elif kind == "heal":
             for ally in self.living(unit.side):
-                if ally.gid == unit.gid or ally.hp >= ally.max_hp:
+                if ally.hp >= ally.max_hp:
                     continue
-                if self.is_adjacent(pos, ally.pos) and self.height_ok(pos, ally.pos):
+                own = ally.gid == unit.gid
+                if own or (self.is_adjacent(pos, ally.pos) and self.height_ok(pos, ally.pos)):
                     gids.append(ally.gid)
                     tiles.add(ally.pos)
             ok = bool(gids)
