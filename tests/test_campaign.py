@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from ashgauntlet.campaign import Save, materialize, new_game
-from ashgauntlet.data import gear_bonus
+from ashgauntlet.data import craft_line, gear_bonus, raise_line
 
 
 class CampaignTests(unittest.TestCase):
@@ -25,6 +25,13 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual(blade.plus, 1)
         self.assertEqual(save.souls, 0)
         self.assertEqual(gear_bonus("ash_blade", 1), 2)
+        asked = raise_line("village_sword", 0)
+        self.assertIn("Village Sword", asked)
+        self.assertIn("200 souls", asked)
+        self.assertIn("attack bonus becomes +2", asked)
+        self.assertIn("Continue or cancel.", asked)
+        self.assertIn("3 ash", craft_line("ash_blade"))
+        self.assertIn("Continue or cancel.", craft_line("ash_blade"))
 
         light = [g for g in save.gear if g.kind == "light_sword"]
         self.assertEqual(light, [])

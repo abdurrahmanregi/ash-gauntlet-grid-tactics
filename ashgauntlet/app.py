@@ -22,8 +22,10 @@ from ashgauntlet.data import (
     ISSEN_FAMILIES,
     RECIPES,
     SKILLS,
+    craft_line,
     episode,
     next_enhance_cost,
+    raise_line,
 )
 from ashgauntlet.paths import bundle_root, user_root
 
@@ -178,6 +180,7 @@ class Game:
         self.save_path = user_root() / "save.json"
         self.save = Save.load(self.save_path)
         self.confirm_new = False
+        self.pending = None
         self.toast = ""
         self.toast_t = 0
         self.lines = []
@@ -368,6 +371,7 @@ class Game:
     def set_mode(self, mode):
         self.mode = mode
         self.confirm_new = False
+        self.pending = None
 
     def stop(self):
         self.running = False
@@ -651,7 +655,7 @@ class Game:
         self.canvas.blit(self.font.render(f"Souls {self.save.souls}", True, ORANGE), (40, 120))
         self.canvas.blit(self.font.render(stone_line, True, TEXT), (40, 154))
         self.canvas.blit(
-            self.font_sm.render("Stones make a piece. Souls raise it. Raising a sword starts at 200 souls.", True, MUTED),
+            self.font_sm.render("Stones make a piece. Souls raise it. A click asks before anything is spent.", True, MUTED),
             (40, 190),
         )
         self.canvas.blit(self.font_b.render("Recipes", True, GOLD), (40, 230))
@@ -664,8 +668,8 @@ class Game:
             self.add_button(
                 (40, y, 560, 48),
                 f"Craft {recipe['name']} ({cost})",
-                lambda rid=recipe_id: self.do_craft(rid),
-                enabled=self.save.can_craft(recipe_id),
+                lambda rid=recipe_id: self.ask_craft(rid),
+                enabled=self.pending is None and self.save.can_craft(recipe_id),
             )
             y += 58
         self.canvas.blit(self.font_b.render("What you carry", True, GOLD), (680, 230))
@@ -680,11 +684,57 @@ class Game:
             else:
                 label = f"{GEAR[gear.kind]['name']}{plus}  ·  {owner}  ·  {cost} souls"
                 enabled = self.save.souls >= cost
-            self.add_button((680, y, 560, 42), label, lambda uid=gear.uid: self.do_enhance(uid), enabled=enabled)
+            self.add_button((680, y, 560, 42), label, lambda uid=gear.uid: self.ask_raise(uid), enabled=self.pending is None and enabled)
             y += 48
             if y > 600:
                 break
-        self.add_button((40, 650, 280, 48), "Back to the road", self.to_world)
+        if self.pending is None:
+            self.add_button((40, 650, 280, 48), "Back to the road", self.to_world)
+        else:
+            self.draw_pending()
+
+    def ask_craft(self, recipe_id):
+        if self.save.can_craft(recipe_id):
+            self.pending = ("craft", recipe_id)
+
+    def ask_raise(self, uid):
+        gear = self.save.gear_by(uid)
+        if gear is None:
+            return
+        cost = next_enhance_cost(gear.kind, gear.plus)
+        if cost is not None and self.save.souls >= cost:
+            self.pending = ("raise", uid)
+
+    def cancel_pending(self):
+        self.pending = None
+
+    def confirm_pending(self):
+        if not self.pending:
+            return
+        kind, target = self.pending
+        self.pending = None
+        if kind == "craft":
+            self.do_craft(target)
+        else:
+            self.do_enhance(target)
+
+    def draw_pending(self):
+        shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        shade.fill((12, 8, 8, 170))
+        self.canvas.blit(shade, (0, 0))
+        card = pygame.Rect(240, 180, 800, 320)
+        pygame.draw.rect(self.canvas, PANEL, card, border_radius=12)
+        pygame.draw.rect(self.canvas, (224, 170, 120), card, 2, border_radius=12)
+        self.canvas.blit(self.font_lg.render("Crafting", True, GOLD), (280, 210))
+        kind, target = self.pending
+        if kind == "craft":
+            text = craft_line(target)
+        else:
+            gear = self.save.gear_by(target)
+            text = raise_line(gear.kind, gear.plus) if gear else "That piece is gone."
+        blit_lines(self.canvas, self.font, wrap(self.font, text, 720), TEXT, 280, 280, 6)
+        self.add_button((280, 410, 240, 52), "Continue", self.confirm_pending)
+        self.add_button((560, 410, 240, 52), "Cancel", self.cancel_pending)
 
     def do_craft(self, recipe_id):
         if not self.save.craft(recipe_id):

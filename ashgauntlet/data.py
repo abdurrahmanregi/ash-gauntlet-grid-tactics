@@ -435,6 +435,25 @@ def next_enhance_cost(kind: str, plus: int) -> int | None:
     return table[plus][0]
 
 
+def raise_line(kind: str, plus: int) -> str:
+    meta = GEAR[kind]
+    cost = next_enhance_cost(kind, plus)
+    nxt = plus + 1
+    bonus = gear_bonus(kind, nxt)
+    stat = "attack" if meta["slot"] == "weapon" else "defense"
+    line = f"Raise {meta['name']} to +{nxt} for {cost} souls? Its {stat} bonus becomes +{bonus}."
+    skill = meta.get("skill")
+    if meta.get("gate") == nxt and skill in SKILLS:
+        line += f" It learns {SKILLS[skill]['name']}."
+    return line + " Continue or cancel."
+
+
+def craft_line(recipe_id: str) -> str:
+    recipe = RECIPES[recipe_id]
+    cost = ", ".join(f"{amount} {name}" for name, amount in recipe["stones"].items())
+    return f"Craft {recipe['name']}? This spends {cost}. Continue or cancel."
+
+
 ISSEN_FAMILIES = {"sword", "light_sword", "dagger", "axe", "spear"}
 MELEE_FAMILIES = {"sword", "light_sword", "dagger", "axe"}
 LINE_FAMILIES = {"bow", "gun"}
