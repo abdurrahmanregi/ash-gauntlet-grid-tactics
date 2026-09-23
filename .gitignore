@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+dist/
+build/
+*.spec
+save.json
+crash.log
+shots/
+raw_art/
