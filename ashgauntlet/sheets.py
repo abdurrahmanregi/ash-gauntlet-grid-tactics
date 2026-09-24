@@ -18,8 +18,8 @@ RANGE_LINE = {
 def workshop_intro() -> list[str]:
     return [
         "Ash and Bone are stones, not money. Pawns drop Ash. Gunners drop Ash too. Spear fighters (Bushi) drop Bone.",
-        "Cinder and Void are not dropped yet, and nothing here spends them.",
-        "A Clan Gun shoots a straight line and is raised with souls. It cannot set Issen.",
+        "Camp beasts drop Cinder. Nest Gun spends Bone and Cinder. Lords drop two Void, and nothing here spends Void.",
+        "A Clan Gun or a Nest Gun shoots a straight line and is raised with souls. It cannot set Issen.",
         "Recipes spend stones and make a new piece. A click asks you to continue or cancel before anything is spent.",
         "Souls only raise a piece you already own. Souls cannot buy stones.",
         "Point at Souls, a stone, a recipe, or a piece. This box reads the attack, defense, and the next upgrade.",
@@ -51,7 +51,7 @@ def soul_lines(souls: int) -> list[str]:
         f"You have {souls} souls.",
         "Souls are kept after a win. They are not coins, and they are not stones.",
         "They only raise a piece you already own. Making a new piece spends stones instead.",
-        "A sword's first raise costs 200 souls. A coat's first raise costs 150 souls. A Clan Gun's first raise costs 300 souls.",
+        "A sword's first raise costs 200 souls. A coat's first raise costs 150 souls. A Clan Gun or a Nest Gun's first raise costs 300 souls.",
         "A light sword gains half the attack of a Village Sword or an Ash Blade.",
         "Point at a piece on the right to see the exact cost and the new bonus.",
     ]
@@ -188,8 +188,12 @@ def recipe_lines(recipe_id: str, stones: dict, can: bool) -> list[str]:
 
 def skill_lines(skill_id: str) -> list[str]:
     skill = SKILLS[skill_id]
+    if skill["kind"] == "oni":
+        cost = "half of his maximum skill points, rounded down"
+    else:
+        cost = f"{skill['sp']} skill points"
     return [
-        f"{skill['name']} — {skill['sp']} skill points. {skill['blurb']}",
+        f"{skill['name']} — {cost}. {skill['blurb']}",
         "Using a skill spends the action. They cannot also attack on that same turn.",
     ]
 
@@ -200,7 +204,8 @@ def issen_lines() -> list[str]:
         "It lasts until this fighter's next turn, or until it answers someone.",
         "The next enemy who swings from the next tile with a sword, light sword, dagger, axe, or spear misses and falls.",
         "A spear from two tiles away does not count. A gun does not count. Skills do not count.",
-        "That attacker is worth four times the souls. A lord would ignore Issen. These maps have no lord.",
+        "That attacker is worth four times the souls. A lord ignores Issen, and the souls are not multiplied.",
+        "The Ash Warden and the Stair Captain are not lords, so Issen still answers them. From the Cinder Bird on, a named lord ignores it.",
     ]
 
 
@@ -213,7 +218,11 @@ def herb_lines() -> list[str]:
 
 def _skill_sentence(skill_id: str) -> str:
     skill = SKILLS[skill_id]
-    return f"{skill['name']} — {skill['sp']} skill points. {skill['blurb']}"
+    if skill["kind"] == "oni":
+        cost = "half of maximum skill points"
+    else:
+        cost = f"{skill['sp']} skill points"
+    return f"{skill['name']} — {cost}. {skill['blurb']}"
 
 
 def fighter_block(
@@ -263,6 +272,25 @@ def fighter_block(
     details = []
     if getattr(unit, "lose_flag", False) or unit.id == "kairo":
         details.append("If they fall, this fight is lost.")
+    if getattr(unit, "issen_immune", False) or getattr(unit, "is_lord", False):
+        details.append("A lord. Issen does not fell them. A real hit still lands, and it breaks a chant.")
+    elif getattr(unit, "hunt", False):
+        details.append("The fight ends on the next turn after this one falls. Issen can still fell them.")
+    status = getattr(unit, "status", None)
+    if status == "sleep":
+        details.append("Asleep. They do nothing on their turn. A hit wakes them.")
+    elif status == "confuse":
+        details.append("Confused. They do nothing for two turns. A hit does not clear it.")
+    elif status == "para":
+        details.append("Paralyzed. They do nothing for two turns. A hit does not clear it.")
+    elif status == "poison":
+        details.append("Poisoned. They lose 3 health at the start of each of their next turns.")
+    if getattr(unit, "chant", None):
+        details.append("Chanting. The red tiles are emptied on their next turn. Any hit breaks it.")
+    if getattr(unit, "oni", False):
+        details.append("Oni-Wake is in control. He acts on his own.")
+    if getattr(unit, "oni_move_only", False):
+        details.append("Oni-Wake has ended. This turn he can only move.")
     if actor_name and unit.side == "enemy":
         if in_reach and strike is not None:
             details.append(f"A normal attack from {actor_name} deals {strike}.")
@@ -317,7 +345,9 @@ def fighter_block(
         souls = 100 if getattr(unit, "is_lord", False) else 10
         parts.append(f"{souls} souls")
         stone = getattr(unit, "stone", None)
-        if stone in STONES:
+        if getattr(unit, "is_lord", False):
+            parts.append("2 Void")
+        elif stone in STONES:
             parts.append(f"1 {STONES[stone]['name']}")
         details.append("Defeating them is worth " + ", ".join(parts) + ". You keep that only if you win the fight.")
         recipe = getattr(unit, "recipe", None)
@@ -331,7 +361,12 @@ def describe_body(save, body_id: str) -> dict:
 
     unit = materialize(save, body_id, (0, 0))
     later = [(skill_id, needed) for skill_id, needed in BODIES[body_id]["skills"] if skill_id not in unit.skills]
-    return fighter_block(unit, later=later, with_loadout=True)
+    block = fighter_block(unit, later=later, with_loadout=True)
+    if body_id == "kairo" and not getattr(save, "oni_wake", False):
+        block["details"].append(
+            "Oni-Wake unlocks after Level 9 - Smith's Stair. It spends half his skill points and he fights alone for three enemy turns."
+        )
+    return block
 
 
 def body_card(save, body_id: str) -> list[str]:

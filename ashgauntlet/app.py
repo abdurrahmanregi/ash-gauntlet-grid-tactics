@@ -9,14 +9,18 @@ import sys
 import pygame
 
 from ashgauntlet.campaign import (
+    STANCES,
     Save,
     build_battle,
+    build_depth,
     default_items,
     default_order,
+    depth_unlocked,
     new_game,
 )
 from ashgauntlet.data import (
     BODIES,
+    DEPTHS,
     EPISODES,
     GEAR,
     ISSEN_FAMILIES,
@@ -27,6 +31,7 @@ from ashgauntlet.data import (
     craft_line,
     episode,
     gear_bonus,
+    level_label,
     next_enhance_cost,
     raise_line,
 )
@@ -70,6 +75,48 @@ TOWN = {
     1: ((150, 132, 108), (104, 90, 72), (126, 110, 90)),
     2: ((168, 154, 132), (116, 104, 88), (142, 128, 108)),
 }
+RIVER = {
+    0: ((86, 118, 96), (52, 78, 70), (68, 96, 84)),
+    1: ((118, 132, 108), (78, 90, 72), (96, 110, 88)),
+    2: ((156, 148, 124), (108, 100, 84), (130, 122, 104)),
+}
+CASTLE = {
+    0: ((128, 124, 116), (88, 84, 78), (108, 104, 96)),
+    1: ((154, 148, 138), (108, 102, 94), (130, 124, 114)),
+    2: ((176, 168, 156), (122, 116, 108), (148, 140, 130)),
+}
+CAMP = {
+    0: ((132, 118, 92), (90, 78, 60), (110, 96, 74)),
+    1: ((156, 136, 104), (108, 92, 70), (130, 112, 86)),
+    2: ((186, 170, 140), (128, 114, 92), (156, 140, 114)),
+}
+FACTORY = {
+    0: ((108, 102, 98), (72, 68, 64), (88, 84, 80)),
+    1: ((132, 118, 108), (90, 78, 70), (110, 96, 88)),
+    2: ((156, 140, 128), (108, 96, 86), (130, 116, 104)),
+}
+HOLLOW = {
+    0: ((78, 84, 96), (52, 56, 66), (64, 70, 82)),
+    1: ((98, 104, 118), (68, 72, 84), (82, 88, 102)),
+    2: ((124, 128, 140), (86, 90, 102), (104, 108, 122)),
+}
+THRONE = {
+    0: ((92, 64, 68), (62, 40, 44), (76, 52, 56)),
+    1: ((120, 78, 80), (82, 52, 56), (100, 64, 68)),
+    2: ((148, 96, 92), (102, 64, 64), (124, 80, 78)),
+}
+PALETTES = {
+    "village": VILLAGE,
+    "cedar": CEDAR,
+    "town": TOWN,
+    "river": RIVER,
+    "castle": CASTLE,
+    "camp": CAMP,
+    "factory": FACTORY,
+    "hollow": HOLLOW,
+    "throne": THRONE,
+}
+PROP_THEMES = {"village", "cedar", "camp"}
 def closest_diamond(mx, my, diamonds):
     """Return the tile whose ground diamond contains the point.
 
@@ -95,9 +142,30 @@ FALLBACK_COLORS = {
     "spear_one": (86, 138, 92),
     "swallow": (64, 148, 146),
     "gun_chief": (196, 112, 64),
+    "stage_man": (168, 96, 72),
+    "smith": (140, 110, 86),
+    "bow_saint": (186, 176, 150),
+    "dancer": (196, 140, 150),
+    "monk_spear": (120, 132, 110),
+    "half_blood": (170, 90, 70),
+    "deserter": (110, 120, 140),
+    "coil_champion": (70, 140, 150),
+    "fang_champion": (176, 176, 168),
+    "shell_champion": (130, 128, 120),
+    "soot_child": (90, 86, 82),
+    "daughter": (210, 170, 150),
     "pawn": (132, 102, 172),
     "bushi": (96, 70, 150),
     "gunner": (120, 86, 168),
+    "claw": (168, 164, 150),
+    "bomb": (150, 150, 158),
+    "bomb_b": (120, 128, 150),
+    "nest": (110, 84, 64),
+    "beast": (176, 80, 70),
+    "beast_bird": (176, 80, 70),
+    "beast_coil": (64, 140, 146),
+    "beast_shell": (150, 146, 136),
+    "lord": (48, 32, 36),
 }
 SPEAKER_SPRITE = {
     "Kairo": "kairo",
@@ -106,6 +174,27 @@ SPEAKER_SPRITE = {
     "Spear-One": "spear_one",
     "Swallow": "swallow",
     "Gun-Chief": "gun_chief",
+    "Stage-Man": "stage_man",
+    "Smith": "smith",
+    "Half-Blood": "half_blood",
+    "Bow-Saint": "bow_saint",
+    "Dancer": "dancer",
+    "Deserter": "deserter",
+    "Monk-Spear": "monk_spear",
+    "Fang-Champion": "fang_champion",
+    "Coil-Champion": "coil_champion",
+    "Shell-Champion": "shell_champion",
+    "Daughter": "daughter",
+    "Soot-Child": "soot_child",
+    "Ash Warden": "bushi",
+    "Stair Captain": "bushi",
+    "Cinder Bird": "beast_bird",
+    "River Coil": "beast_coil",
+    "Stone Shell": "beast_shell",
+    "The Father": "lord",
+    "Fox-Minister": "lord",
+    "Glass-Surgeon": "lord",
+    "Kurogane": "lord",
 }
 
 
@@ -223,6 +312,10 @@ class Game:
         self.pending = None
         self.pin = None
         self.gear_scroll = 0
+        self.road_scroll = 0
+        self.bench_scroll = 0
+        self.venue = ("episode", 1)
+        self.deploy_ep = None
         self.inspect_gid = None
         self.toast = ""
         self.toast_t = 0
@@ -295,10 +388,18 @@ class Game:
                     widget.callback()
                     return
             self.click(event.pos)
-        elif event.type == pygame.MOUSEWHEEL and self.mode == "workshop" and self.pending is None:
-            if pygame.mouse.get_pos()[0] >= 660:
+        elif event.type == pygame.MOUSEWHEEL:
+            pos = pygame.mouse.get_pos()
+            if self.mode == "workshop" and self.pending is None and pos[0] >= 660:
                 cap = max(0, len(self.save.gear) - 7)
                 self.gear_scroll = max(0, min(cap, self.gear_scroll - event.y))
+            elif self.mode == "world" and pos[0] < 820:
+                cap = max(0, len(EPISODES) - 8)
+                self.road_scroll = max(0, min(cap, self.road_scroll - event.y))
+            elif self.mode == "deploy" and pos[0] < 560 and self.save:
+                benched = [body for body in self.save.roster if body not in self.order]
+                cap = max(0, len(benched) - 2)
+                self.bench_scroll = max(0, min(cap, self.bench_scroll - event.y))
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
             if self.mode == "battle":
                 if self.aim:
@@ -338,6 +439,14 @@ class Game:
             if self.battle.outcome and not self.resolved:
                 self.open_results()
                 return
+            if self.battle.phase == "player" and not self.battle.outcome:
+                forced = self.battle.auto_opening()
+                if forced is not None:
+                    self.sel = None
+                    self.preview = None
+                    self.aim = None
+                    self.enqueue(forced)
+                    return
             if self.battle.phase == "enemy" and not self.battle.outcome:
                 self.enqueue(self.battle.enemy_step())
 
@@ -363,6 +472,7 @@ class Game:
             "results": self.draw_results,
             "workshop": self.draw_workshop,
             "world": self.draw_world,
+            "depths": self.draw_depths,
         }[self.mode]
         draw()
         if self.toast_t > 0 and self.mode == "battle":
@@ -406,7 +516,7 @@ class Game:
         self.canvas.blit(sub, (460, 214))
         blurb = "Aim the diamond at their feet. Overlapping pictures do not take the click."
         self.canvas.blit(self.font.render(blurb, True, MUTED), (460, 280))
-        self.canvas.blit(self.font_sm.render("v0.0.2  ·  the gun town", True, MUTED), (460, 314))
+        self.canvas.blit(self.font_sm.render("v0.0.3  ·  the whole road", True, MUTED), (460, 314))
         label = "Erase the saved march?" if self.confirm_new else "Begin the march"
         y = 380
         self.add_button((460, y, 320, 52), label, self.begin)
@@ -427,8 +537,9 @@ class Game:
             "4. The buttons on the right are skills, herbs, Issen, and Wait. Point at a button to read it. Heal works on that fighter or on a friend on the next tile. A herb does too.",
             "5. Issen means you only step and set it. The next sword, spear, or axe that swings from the next tile misses, and the attacker falls.",
             "6. Low, mid, and high ground are drawn as steps. A two-step gap blocks walking and striking.",
-            "7. Ash and Bone are stones, not money. Pawns and gunners drop Ash. Spear fighters drop Bone. Stones make a new piece. Souls only raise a piece you already own. A Clan Gun's first raise costs 300 souls.",
-            "8. If Kairo falls, the fight is lost. On the first map, Shio is the same once she arrives.",
+            "7. Ash and Bone are stones, not money. Pawns and gunners drop Ash. Spear fighters drop Bone. Camp beasts drop Cinder. Lords drop two Void. Stones make a new piece. Souls only raise a piece you already own.",
+            "8. The road lists every fight as Level, name, and Cleared, Next, or Locked. Hollow Depths is a separate list and does not skip the road.",
+            "9. If Kairo falls, the fight is lost. On the first map, Shio is the same once she arrives. On the rebel ford, the daughter is the same.",
         ]
         y = 120
         for line in lines:
@@ -466,26 +577,51 @@ class Game:
 
     def open_episode(self, episode_id):
         self.ep_id = episode_id
+        self.venue = ("episode", episode_id)
         self.save.prepare_episode(episode_id)
         self.save.write(self.save_path)
         ep = episode(episode_id)
+        self.deploy_ep = ep
         self.lines = list(ep["intro"])
         self.line_i = 0
+        self.bench_scroll = 0
+        if not ep.get("battle", True):
+            self.after_lines = "coda_done"
+            self.mode = "story"
+            return
         self.after_lines = "deploy"
         self.mode = "story"
         self.prepare_deploy()
 
+    def open_depth(self, floor):
+        if not depth_unlocked(self.save, floor):
+            return
+        spec = DEPTHS[floor - 1]
+        self.venue = ("depth", floor)
+        self.deploy_ep = {"id": floor, "name": "Hollow Stone", "must": ["kairo"], "slots": spec["slots"]}
+        self.bench_scroll = 0
+        self.prepare_deploy()
+        self.mode = "deploy"
+
     def prepare_deploy(self):
-        ep = episode(self.ep_id)
+        ep = self.deploy_ep
         self.order = default_order(self.save, ep)
         self.item_plan = default_items(self.save, self.order)
-        self.deploy_focus = self.order[0]
+        self.deploy_focus = self.order[0] if self.order else "kairo"
 
     def advance_story(self):
         if self.line_i < len(self.lines) - 1:
             self.line_i += 1
             return
+        if self.after_lines == "coda_done":
+            self.finish_coda()
+            return
         self.mode = self.after_lines
+
+    def finish_coda(self):
+        self.save.finish_victory(self.ep_id, None)
+        self.save.write(self.save_path)
+        self.mode = "world"
 
     def draw_story(self):
         speaker, text = self.lines[self.line_i]
@@ -503,33 +639,43 @@ class Game:
         self.canvas.blit(self.font_sm.render("Click to continue", True, MUTED), (180, 470))
 
     def draw_deploy(self):
-        ep = episode(self.ep_id)
-        self.canvas.blit(self.font_lg.render(ep["name"], True, TEXT), (40, 24))
+        ep = self.deploy_ep
+        if self.venue and self.venue[0] == "depth":
+            header = f"Depths {self.venue[1]} - Hollow Stone"
+        else:
+            header = level_label(ep["id"], ep["name"])
+        self.canvas.blit(self.font_lg.render(header, True, TEXT), (40, 16))
         self.canvas.blit(
             self.font_sm.render("Point at a name to read them. Click it to change their kit. Kairo is required.", True, MUTED),
-            (40, 78),
+            (40, 64),
         )
         if self.toast_t > 0:
-            self.canvas.blit(self.font_sm.render(self.toast, True, GOLD), (340, 36))
-        self.canvas.blit(self.font_b.render("Going", True, ORANGE), (40, 112))
-        y = 148
+            self.canvas.blit(self.font_sm.render(self.toast, True, GOLD), (40, 86))
+        self.canvas.blit(self.font_b.render("Going", True, ORANGE), (40, 100))
+        y = 124
         for index, body_id in enumerate(self.order):
             self._deploy_row(body_id, index, y, going=True)
-            y += 46
+            y += 30
         benched = [body_id for body_id in self.save.roster if body_id not in self.order]
-        if benched and y < 456:
-            self.canvas.blit(self.font_b.render("Staying back", True, MUTED), (40, y + 2))
-            y += 32
-            for body_id in benched:
-                if y > 444:
+        if benched and y < 430:
+            label = "Staying back"
+            if len(benched) > 2:
+                label += "  ·  mouse wheel"
+            self.canvas.blit(self.font_b.render(label, True, MUTED), (40, y))
+            y += 28
+            self.bench_scroll = max(0, min(self.bench_scroll, max(0, len(benched) - 2)))
+            shown = 0
+            for body_id in benched[self.bench_scroll :]:
+                if y > 456 or shown >= 2:
                     break
                 self.add_button(
-                    (40, y, 220, 40),
+                    (40, y, 220, 30),
                     BODIES[body_id]["name"],
                     lambda b=body_id: self.add_deploy(b),
                     info=body_card(self.save, body_id),
                 )
-                y += 44
+                y += 34
+                shown += 1
         self._draw_kit(ep)
         self.add_button((900, 650, 340, 48), "Start the fight", self.start_battle)
         lines = self.info_at(pygame.mouse.get_pos())
@@ -540,14 +686,14 @@ class Game:
 
     def _deploy_row(self, body_id, index, y, going):
         name = BODIES[body_id]["name"]
-        locked = body_id in episode(self.ep_id)["must"]
-        self.add_button((40, y, 210, 40), name, lambda b=body_id: self.focus(b), info=body_card(self.save, body_id))
+        locked = body_id in self.deploy_ep["must"]
+        self.add_button((40, y, 210, 26), name, lambda b=body_id: self.focus(b), info=body_card(self.save, body_id))
         if index > 0:
-            self.add_button((260, y, 64, 40), "Up", lambda i=index: self.move_order(i, -1))
+            self.add_button((260, y, 64, 26), "Up", lambda i=index: self.move_order(i, -1))
         if index < len(self.order) - 1:
-            self.add_button((332, y, 80, 40), "Down", lambda i=index: self.move_order(i, 1))
+            self.add_button((332, y, 80, 26), "Down", lambda i=index: self.move_order(i, 1))
         if not locked:
-            self.add_button((420, y, 90, 40), "Bench", lambda b=body_id: self.bench(b))
+            self.add_button((420, y, 90, 26), "Bench", lambda b=body_id: self.bench(b))
 
     def focus(self, body_id):
         self.deploy_focus = body_id
@@ -559,7 +705,7 @@ class Game:
         self.order[index], self.order[other] = self.order[other], self.order[index]
 
     def bench(self, body_id):
-        if body_id in episode(self.ep_id)["must"]:
+        if body_id in self.deploy_ep["must"]:
             self.say("They have to come on this march.")
             return
         self.order = [body for body in self.order if body != body_id]
@@ -568,7 +714,7 @@ class Game:
             self.deploy_focus = self.order[0]
 
     def add_deploy(self, body_id):
-        ep = episode(self.ep_id)
+        ep = self.deploy_ep
         if len(self.order) >= len(ep["slots"]):
             self.say(f"This map only has room for {len(ep['slots'])}.")
             return
@@ -636,8 +782,16 @@ class Game:
         left = max(0, self.save.herbs - held)
         self.canvas.blit(
             self.font_sm.render(f"Herbs left to hand out: {left}. This map has room for {len(ep['slots'])}.", True, MUTED),
-            (850, 586),
+            (850, 578),
         )
+        if self.save.stances:
+            current = STANCES.get(self.save.stance, "No stance")
+            self.add_button(
+                (850, 604, 370, 34),
+                f"Stance: {current}",
+                self.cycle_stance,
+                info=self._stance_lines(),
+            )
 
     def _gear_label(self, gear):
         if gear is None:
@@ -683,6 +837,24 @@ class Game:
             return
         plan[slot] = "herb"
 
+    def cycle_stance(self):
+        row = [None] + list(self.save.stances)
+        current = self.save.stance if self.save.stance in self.save.stances else None
+        index = row.index(current)
+        self.save.stance = row[(index + 1) % len(row)]
+
+    def _stance_lines(self):
+        lines = [
+            "Only one stance can be on. Click to change it. It lasts until you change it again.",
+            "White Fang: an ally on higher ground deals 6 more on the first hit.",
+            "Cinder Bird: every ally gains 3 attack.",
+            "River Coil: spears and guns ignore 4 defense.",
+            "Stone Shell: the first hit each fighter takes in a round is halved, and at least 1.",
+        ]
+        owned = [STANCES[key] for key in self.save.stances]
+        lines.append("Unlocked: " + ", ".join(owned) + ".")
+        return lines
+
     def start_battle(self):
         if not self.order:
             self.say("Send at least Kairo.")
@@ -694,7 +866,11 @@ class Game:
             return
         self.snap = self.save.to_dict()
         self.save.herbs -= used
-        self.battle = build_battle(self.save, self.ep_id, self.order, plan, random.Random())
+        if self.venue and self.venue[0] == "depth":
+            self.battle = build_depth(self.save, self.venue[1], self.order, plan, random.Random())
+        else:
+            self.venue = ("episode", self.ep_id)
+            self.battle = build_battle(self.save, self.ep_id, self.order, plan, random.Random())
         self.mode = "battle"
         self.sel = None
         self.preview = None
@@ -715,8 +891,12 @@ class Game:
         self.resolved = True
         if self.battle.outcome == "win":
             self._refund_herbs()
-            self.result_notes = self.save.finish_victory(self.ep_id, self.battle)
-            self.result_title = "The field is clear"
+            if self.venue and self.venue[0] == "depth":
+                self.result_notes = self.save.finish_depth(self.venue[1], self.battle)
+                self.result_title = f"Depths {self.venue[1]} - Hollow Stone is clear"
+            else:
+                self.result_notes = self.save.finish_victory(self.ep_id, self.battle)
+                self.result_title = "The field is clear"
         else:
             fallen = "Kairo"
             for unit in self.battle.units:
@@ -753,8 +933,11 @@ class Game:
             self.add_button((380, 620, 280, 52), "Leave", self.leave_loss)
 
     def after_win(self):
+        if self.venue and self.venue[0] == "depth":
+            self.mode = "depths"
+            return
         ep = episode(self.ep_id)
-        self.lines = list(ep["outro"])
+        self.lines = list(ep["outro"]) or [("Narrator", "The field is quiet.")]
         self.line_i = 0
         self.after_lines = "workshop"
         self.mode = "story"
@@ -913,35 +1096,94 @@ class Game:
         self.mode = "world"
 
     def draw_world(self):
-        self.canvas.blit(self.font_lg.render("The road", True, TEXT), (60, 36))
+        self.canvas.blit(self.font_lg.render("The road", True, TEXT), (48, 28))
         if self.save.next_episode > EPISODES[-1]["id"]:
-            banner = "This part of the road is done. You can walk these fights again."
+            banner = "The road is walked. Every level below can be walked again."
         elif self.save.cleared:
-            banner = "The next fight is open. The ones behind you can be walked again."
+            banner = "The next level is open. Cleared levels can be walked again."
         else:
             banner = "Kureha is burning."
-        self.canvas.blit(self.font.render(banner, True, MUTED), (60, 96))
-        if self.save.cleared:
-            ash = self.save.stones.get("ash", 0)
-            bone = self.save.stones.get("bone", 0)
-            held = (
-                f"You hold {self.save.souls} souls, {ash} Ash, {bone} Bone. "
-                "Pawns and gunners drop Ash. Spear fighters drop Bone. Stones make gear. Souls only raise it."
-            )
-            blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, held, 1100), TEXT, 60, 132, 2)
+        self.canvas.blit(self.font.render(banner, True, MUTED), (48, 78))
+        self.canvas.blit(
+            self.font_sm.render("Each line is the level number, the place, and whether it is cleared. Mouse wheel moves the list.", True, MUTED),
+            (48, 112),
+        )
+        visible = 8
+        cap = max(0, len(EPISODES) - visible)
+        self.road_scroll = max(0, min(self.road_scroll, cap))
         for index, ep in enumerate(EPISODES):
+            if index < self.road_scroll or index >= self.road_scroll + visible:
+                continue
             locked = ep["id"] > self.save.next_episode
-            status = "Cleared" if ep["id"] in self.save.cleared else ("Locked" if locked else "Next")
-            label = f"{ep['name']}  ·  {status}"
+            if ep["id"] in self.save.cleared:
+                status = "Cleared"
+            elif locked:
+                status = "Locked"
+            else:
+                status = "Next"
+            label = level_label(ep["id"], ep["name"], status)
             self.add_button(
-                (60, 170 + index * 90, 520, 70),
+                (48, 148 + (index - self.road_scroll) * 58, 760, 50),
                 label,
                 lambda eid=ep["id"]: self.open_episode(eid),
                 enabled=not locked,
             )
+        if cap:
+            self.add_button((48, 620, 160, 40), "Earlier", lambda: self._scroll_road(-1))
+            self.add_button((220, 620, 160, 40), "Later", lambda: self._scroll_road(1))
+        panel_x = 840
         if self.save.cleared:
-            self.add_button((60, 560, 280, 48), "Workshop", lambda: self.set_mode("workshop"))
-        self.add_button((360, 560, 220, 48), "Title", lambda: self.set_mode("title"))
+            ash = self.save.stones.get("ash", 0)
+            bone = self.save.stones.get("bone", 0)
+            cinder = self.save.stones.get("cinder", 0)
+            void = self.save.stones.get("void", 0)
+            held = f"{self.save.souls} souls. Ash {ash}. Bone {bone}. Cinder {cinder}. Void {void}."
+            blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, held, 400), TEXT, panel_x, 160, 2)
+            self.add_button((panel_x, 240, 360, 48), "Workshop", lambda: self.set_mode("workshop"))
+        if 13 in self.save.cleared:
+            opened = self.save.depths_cleared
+            self.add_button(
+                (panel_x, 304, 360, 48),
+                f"Hollow Depths - Floor {opened} cleared",
+                lambda: self.set_mode("depths"),
+            )
+        if self.save.stances:
+            current = STANCES.get(self.save.stance, "none")
+            self.canvas.blit(
+                self.font_sm.render(f"Stance on the next deploy: {current}.", True, MUTED),
+                (panel_x, 370),
+            )
+        self.add_button((panel_x, 620, 220, 40), "Title", lambda: self.set_mode("title"))
+
+    def _scroll_road(self, step):
+        cap = max(0, len(EPISODES) - 8)
+        self.road_scroll = max(0, min(cap, self.road_scroll + step))
+
+    def draw_depths(self):
+        self.canvas.blit(self.font_lg.render("Hollow Depths", True, TEXT), (48, 28))
+        note = (
+            "These floors are not story levels. Floors 1 to 4 open after Level 13. "
+            "Floors 5 to 8 open after Level 18. Floors 9 to 12 open after Level 22. "
+            "Floor 12 brings Soot-Child at level 1. Clearing a floor does not skip the road."
+        )
+        blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, note, 1180), MUTED, 48, 78, 2)
+        for floor in range(1, 13):
+            column = 0 if floor <= 6 else 1
+            row = floor - 1 if floor <= 6 else floor - 7
+            open_floor = depth_unlocked(self.save, floor)
+            if floor <= self.save.depths_cleared:
+                status = "Cleared"
+            elif open_floor:
+                status = "Next"
+            else:
+                status = "Locked"
+            self.add_button(
+                (48 + column * 600, 160 + row * 70, 560, 58),
+                f"Depths {floor} - Hollow Stone - {status}",
+                lambda number=floor: self.open_depth(number),
+                enabled=open_floor or floor <= self.save.depths_cleared,
+            )
+        self.add_button((48, 640, 240, 44), "Back to the road", lambda: self.set_mode("world"))
 
     def enqueue(self, events):
         for event in events:
@@ -963,6 +1205,12 @@ class Game:
                 self.anims.append({"t": "banner", "label": "Someone reaches the field", "n": 28, "f": 0})
             elif kind == "issen":
                 self.anims.append({"t": "banner", "label": "ISSEN", "n": 22, "f": 0})
+            elif kind == "chant":
+                self.anims.append({"t": "banner", "label": "CHANT", "n": 28, "f": 0})
+                self.say("A chant has started. The red tiles empty next turn unless that enemy is hit.")
+            elif kind == "oni":
+                self.anims.append({"t": "banner", "label": "ONI-WAKE", "n": 28, "f": 0})
+                self.say("Oni-Wake. Kairo fights on his own for three enemy turns.")
         if events and not self.anims:
             self.anims.append({"t": "banner", "label": "", "n": 6, "f": 0})
 
@@ -1104,7 +1352,7 @@ class Game:
             return
         skill_id = self.aim[1]
         skill = SKILLS[skill_id]
-        if skill["kind"] == "line":
+        if skill["kind"] in ("line", "cross"):
             tile = data.pos if kind == "unit" else data
             from ashgauntlet.rules import ortho_dir
 
@@ -1148,8 +1396,12 @@ class Game:
             return
         skill = SKILLS[skill_id]
         preview = self.preview or unit.pos
-        if skill["kind"] in ("mode", "nova", "heal_aura", "heal_all"):
+        if skill["kind"] in ("mode", "nova", "heal_aura", "heal_all", "aura", "oni"):
             self.act(preview, {"type": "skill", "skill": skill_id})
+            return
+        if skill["kind"] in ("line", "cross"):
+            self.aim = ("skill", skill_id)
+            self.say(skill["blurb"])
             return
         options = self.battle.skill_options(unit, preview, skill_id)
         if skill["kind"] == "heal" and options["gids"] == [unit.gid]:
@@ -1163,6 +1415,7 @@ class Game:
             return
         self.draw_map()
         self.draw_highlights()
+        self.draw_chant()
         mx, my = pygame.mouse.get_pos()
         picked = self.pick(mx, my) if mx < 900 else None
         self.draw_units()
@@ -1228,12 +1481,7 @@ class Game:
 
     def draw_map(self):
         battle = self.battle
-        if battle.theme == "cedar":
-            palette = CEDAR
-        elif battle.theme == "town":
-            palette = TOWN
-        else:
-            palette = VILLAGE
+        palette = PALETTES.get(battle.theme, VILLAGE)
         for x, y in self.cells():
             top, lift, cx, cy = self.tile_poly(x, y)
             height = battle.height((x, y))
@@ -1241,6 +1489,8 @@ class Game:
             blocked = (x, y) in battle.blocked
             if blocked and battle.theme == "town":
                 top_c, left_c, right_c = (62, 52, 44), (42, 36, 30), (52, 44, 36)
+            elif blocked and battle.theme == "river":
+                top_c, left_c, right_c = (46, 78, 108), (30, 52, 74), (38, 64, 90)
             elif blocked:
                 top_c = tuple(max(0, c - 28) for c in top_c)
             if lift:
@@ -1250,7 +1500,7 @@ class Game:
                 pygame.draw.polygon(self.canvas, right_c, right)
             pygame.draw.polygon(self.canvas, top_c, top)
             pygame.draw.polygon(self.canvas, (28, 22, 18), top, 1)
-            if blocked and height == 0 and battle.theme != "town":
+            if blocked and height == 0 and battle.theme in PROP_THEMES:
                 prop = self.assets.props.get("house" if (x + y) % 2 == 0 else "tree")
                 if prop:
                     self.canvas.blit(prop, prop.get_rect(midbottom=(cx, cy - lift + 8)))
@@ -1290,6 +1540,12 @@ class Game:
         else:
             for target in self.battle.attack_targets(unit, preview):
                 self.paint(target.pos, (210, 72, 64, 130))
+
+    def draw_chant(self):
+        if self.battle is None:
+            return
+        for tile in self.battle.chant_marks():
+            self.paint(tile, (170, 36, 48, 120))
 
     def marked_tiles(self):
         unit = self.selected()
@@ -1371,6 +1627,9 @@ class Game:
         image = self.sprite(unit.sprite)
         rect = image.get_rect(midbottom=(cx, cy))
         self.canvas.blit(image, rect)
+        if getattr(unit, "oni", False):
+            pygame.draw.polygon(self.canvas, (42, 28, 32), [(cx - 16, rect.top + 18), (cx - 30, rect.top - 8), (cx - 6, rect.top + 6)])
+            pygame.draw.polygon(self.canvas, (42, 28, 32), [(cx + 16, rect.top + 18), (cx + 30, rect.top - 8), (cx + 6, rect.top + 6)])
         if unit.issen and self.assets.fx.get("issen"):
             flash = self.assets.fx["issen"]
             self.canvas.blit(flash, flash.get_rect(center=(cx, rect.top + 10)))
@@ -1492,39 +1751,45 @@ class Game:
             self._sheet = block
         if actor and battle.phase == "player":
             preview = self.preview if self.preview in self._stand() else actor.pos
-            y = 478
-            self.add_button((920, y, 160, 34), "Attack", lambda: self.set_aim(("attack",)))
-            self.add_button((1090, y, 160, 34), "Wait", lambda: self.act(preview, {"type": "wait"}))
-            y += 38
-            if actor.weapon_family in ISSEN_FAMILIES:
-                self.add_button(
-                    (920, y, 330, 34),
-                    "Issen",
-                    lambda: self.act(preview, {"type": "issen"}),
-                    info=issen_lines(),
-                )
-                y += 38
-            for skill_id in actor.skills:
-                skill = SKILLS[skill_id]
-                ready = battle.skill_options(actor, preview, skill_id)["ok"]
-                self.add_button(
-                    (920, y, 330, 34),
-                    f"{skill['name']}  {skill['sp']} SP",
-                    lambda sid=skill_id: self.use_skill(sid),
-                    enabled=ready,
-                    info=skill_lines(skill_id),
-                )
-                y += 38
-            for slot, item in enumerate(actor.items):
-                if item != "herb":
-                    continue
-                self.add_button(
-                    (920, y, 330, 34),
-                    f"Herb {slot + 1}",
-                    lambda s=slot: self.set_aim(("item", s)),
-                    info=herb_lines(),
-                )
-                y += 38
+            if actor.oni_move_only:
+                self.add_button((920, 620, 330, 36), "Wait", lambda: self.act(preview, {"type": "wait"}))
+            else:
+                y = 404
+                self.add_button((920, y, 160, 26), "Attack", lambda: self.set_aim(("attack",)))
+                self.add_button((1090, y, 160, 26), "Wait", lambda: self.act(preview, {"type": "wait"}))
+                y += 28
+                if actor.weapon_family in ISSEN_FAMILIES and y < 640:
+                    self.add_button(
+                        (920, y, 330, 26),
+                        "Issen",
+                        lambda: self.act(preview, {"type": "issen"}),
+                        info=issen_lines(),
+                    )
+                    y += 28
+                for skill_id in actor.skills:
+                    if y > 632:
+                        break
+                    skill = SKILLS[skill_id]
+                    ready = battle.skill_options(actor, preview, skill_id)["ok"]
+                    cost = battle.skill_cost(actor, skill_id)
+                    self.add_button(
+                        (920, y, 330, 26),
+                        f"{skill['name']}  {cost} SP",
+                        lambda sid=skill_id: self.use_skill(sid),
+                        enabled=ready,
+                        info=skill_lines(skill_id),
+                    )
+                    y += 28
+                for slot, item in enumerate(actor.items):
+                    if item != "herb" or y > 632:
+                        continue
+                    self.add_button(
+                        (920, y, 330, 26),
+                        f"Herb {slot + 1}",
+                        lambda s=slot: self.set_aim(("item", s)),
+                        info=herb_lines(),
+                    )
+                    y += 34
         remaining = len(battle.unacted_players()) if battle.phase == "player" else 0
         label = f"End phase ({remaining} left)" if remaining else "End phase"
         self.add_button((920, 668, 330, 40), label, self.end_phase, enabled=battle.phase == "player" and not battle.outcome)
@@ -1534,13 +1799,13 @@ class Game:
             y = self._sheet_y
             for line in details:
                 wrapped = wrap(self.font_sm, line, 340)
-                if y + len(wrapped) * (self.font_sm.get_height() + 2) > 468:
+                if y + len(wrapped) * (self.font_sm.get_height() + 2) > 396:
                     break
                 y += blit_lines(self.canvas, self.font_sm, wrapped, MUTED, 920, y, 2)
-            if actor is not None and unit.gid != actor.gid and y <= 450:
-                self.canvas.blit(self.font_sm.render(f"Orders stay with {actor.name}.", True, GOLD), (920, 452))
-            elif self.aim and y <= 450:
-                self.canvas.blit(self.font_sm.render("Click the bright diamond. Right-click cancels.", True, GOLD), (920, 452))
+            if actor is not None and unit.gid != actor.gid and y <= 376:
+                self.canvas.blit(self.font_sm.render(f"Orders stay with {actor.name}.", True, GOLD), (920, 376))
+            elif self.aim and y <= 376:
+                self.canvas.blit(self.font_sm.render("Click the bright diamond. Right-click cancels.", True, GOLD), (920, 376))
             for widget in self.widgets:
                 if widget.rect.x >= 900:
                     widget.draw(self.canvas, self.font)

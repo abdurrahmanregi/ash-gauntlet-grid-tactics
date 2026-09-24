@@ -205,19 +205,27 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(battle.preview_damage(hero, foe), 6)
 
     def test_maps_and_reinforcement(self):
-        for episode_id in (1, 2, 3):
-            ep = episode(episode_id)
-            from ashgauntlet.data import grid_from_rows
+        from ashgauntlet.data import EPISODES, grid_from_rows
 
+        for ep in EPISODES:
+            if not ep.get("battle", True):
+                self.assertEqual(ep["enemies"], [])
+                continue
             _heights, width, height = grid_from_rows(ep["heights"])
             blocked = set(map(tuple, ep["blocked"]))
             spots = [tuple(p) for p in ep["slots"]]
             spots += [tuple(e["pos"]) for e in ep["enemies"]]
             spots += [tuple(r["pos"]) for r in ep["reinforcements"]]
-            self.assertEqual(len(spots), len(set(spots)))
+            spots += [tuple(g["pos"]) for g in ep.get("guests", [])]
+            self.assertEqual(len(spots), len(set(spots)), ep["name"])
+            self.assertGreaterEqual(len(ep["slots"]), 1, ep["name"])
+            self.assertLessEqual(len(ep["intro"]), 8, ep["name"])
+            self.assertLessEqual(len(ep["outro"]), 4, ep["name"])
+            if ep.get("win") == "lord":
+                self.assertTrue(any(enemy.get("hunt") for enemy in ep["enemies"]), ep["name"])
             for spot in spots:
-                self.assertTrue(0 <= spot[0] < width and 0 <= spot[1] < height)
-                self.assertNotIn(spot, blocked)
+                self.assertTrue(0 <= spot[0] < width and 0 <= spot[1] < height, (ep["name"], spot))
+                self.assertNotIn(spot, blocked, (ep["name"], spot))
 
         save = new_game()
         battle = build_battle(save, 1, ["kairo", "sword_two"], {}, random.Random(0))
@@ -289,6 +297,166 @@ class RuleTests(unittest.TestCase):
         hits = [event for event in events if event.get("t") == "hit" and not event.get("miss")]
         self.assertEqual(len(hits), 2)
         self.assertEqual(foe.hp, 16)
+
+    def test_level_label_and_later_rules(self):
+        from ashgauntlet.data import level_label
+
+        self.assertEqual(level_label(1, "Kureha Burns", "Cleared"), "Level 1 - Kureha Burns - Cleared")
+
+        hero = fighter(pos=(0, 0), atk=30)
+        mark = fighter(id="boss", name="Boss", side="enemy", pos=(1, 0), hp=10, defn=0, hunt=True)
+        extra = fighter(id="pawn", name="Pawn", side="enemy", pos=(4, 4), hp=40, defn=0, mov=0)
+        battle = make([hero, mark, extra], w=8, h=8)
+        battle.win_mode = "lord"
+        _events, err = battle.player_act(hero.gid, hero.pos, {"type": "attack", "target": mark.gid})
+        self.assertIsNone(err)
+        self.assertTrue(battle.hunt_down)
+        self.assertIsNone(battle.outcome)
+        battle.end_player_phase()
+        run_enemies(battle)
+        self.assertEqual(battle.outcome, "win")
+
+        warden = fighter(id="warden", name="Warden", side="enemy", pos=(1, 0), hp=20, atk=8, defn=0)
+        sleeper = fighter(pos=(0, 0), issen=True, hp=20, max_hp=20, defn=0)
+        battle = make([sleeper, warden])
+        battle.phase = "enemy"
+        battle.apply_act(warden, warden.pos, {"type": "attack", "target": sleeper.gid})
+        self.assertFalse(warden.alive)
+        self.assertEqual(sleeper.hp, 20)
+
+        high = fighter(id="e", name="E", side="enemy", pos=(1, 0), atk=6, defn=0, hp=30)
+        low = fighter(pos=(0, 0), atk=6, defn=0, hp=30)
+        battle = make([low, high], heights={(1, 0): 1})
+        battle.enemy_high_ground = True
+        self.assertEqual(battle.preview_damage(high, low), 12)
+        battle.stance = "fang"
+        self.assertEqual(battle.preview_damage(low, high), 6)
+        battle.stance = "bird"
+        self.assertEqual(battle.attack_power(low), 9)
+        battle.stance = "shell"
+        self.assertEqual(battle.preview_damage(high, low), 6)
+        battle.stance = "coil"
+        low.weapon_family = "spear"
+        high.defn = 6
+        self.assertEqual(battle.defense_power(high, low), 2)
+
+        left = fighter(id="fang_a", name="A", side="enemy", pos=(3, 1), hp=10, max_hp=10, twin="fang_b", atk=1)
+        right = fighter(id="fang_b", name="B", side="enemy", pos=(2, 2), hp=10, max_hp=10, twin="fang_a", atk=1)
+        hitter = fighter(pos=(1, 2), atk=40, hp=40, max_hp=40, defn=4)
+        battle = make([hitter, left, right])
+        battle.player_act(hitter.gid, hitter.pos, {"type": "attack", "target": right.gid})
+        self.assertFalse(right.alive)
+        battle.end_player_phase()
+        run_enemies(battle)
+        self.assertTrue(right.alive)
+        self.assertEqual(right.hp, 5)
+
+        both_a = fighter(id="fang_a", name="A", side="enemy", pos=(1, 0), hp=5, max_hp=10, twin="fang_b")
+        both_b = fighter(id="fang_b", name="B", side="enemy", pos=(2, 1), hp=5, max_hp=10, twin="fang_a")
+        cleaner = fighter(pos=(1, 1), atk=40, mov=5)
+        battle = make([cleaner, both_a, both_b])
+        battle.player_act(cleaner.gid, cleaner.pos, {"type": "attack", "target": both_a.gid})
+        battle.units[0].acted = False
+        battle.player_act(cleaner.gid, (1, 1), {"type": "attack", "target": both_b.gid})
+        self.assertEqual(battle.outcome, "win")
+        self.assertFalse(both_a.alive)
+        self.assertFalse(both_b.alive)
+
+        asleep = fighter(id="e", name="E", side="enemy", pos=(2, 0), hp=20, status="sleep", status_left=2, mov=4)
+        watcher = fighter(pos=(0, 0), atk=8)
+        battle = make([watcher, asleep])
+        battle.phase = "enemy"
+        battle.enemy_act(asleep)
+        self.assertEqual(asleep.pos, (2, 0))
+        self.assertEqual(asleep.status_left, 1)
+        asleep.acted = False
+        battle.phase = "player"
+        battle.player_act(watcher.gid, watcher.pos, {"type": "wait"})
+        watcher.acted = False
+        battle.player_act(watcher.gid, (1, 0), {"type": "attack", "target": asleep.gid})
+        self.assertIsNone(asleep.status)
+
+        thief = fighter(pos=(0, 0), skills=["steal"], sp=8, max_sp=8)
+        rich = fighter(id="e", name="E", side="enemy", pos=(1, 0), hp=20, stone="cinder", recipe="nest_gun")
+        battle = make([thief, rich])
+        _events, err = battle.player_act(thief.gid, thief.pos, {"type": "skill", "skill": "steal", "target": rich.gid})
+        self.assertIsNone(err)
+        self.assertTrue(battle.loot_stones == ["cinder"] or battle.loot_recipes == ["nest_gun"])
+        self.assertTrue(rich.stone is None or rich.recipe is None)
+
+        nest = fighter(id="nest", name="Nest", side="enemy", pos=(3, 3), mov=0, weapon_family="gun")
+        battle = make([nest], w=8, h=8)
+        stand, _prev = battle.movement(nest)
+        self.assertEqual(set(stand), {(3, 3)})
+
+        kairo = fighter(id="kairo", name="Kairo", pos=(0, 4), sp=20, max_sp=20, skills=["oni_wake"], hp=40, max_hp=40, defn=4)
+        dummy = fighter(id="e", name="E", side="enemy", pos=(0, 0), hp=80, atk=1, defn=0, mov=0)
+        battle = make([kairo, dummy], w=8, h=8)
+        battle.oni_allowed = True
+        _events, err = battle.player_act(kairo.gid, kairo.pos, {"type": "skill", "skill": "oni_wake"})
+        self.assertIsNone(err)
+        self.assertEqual(kairo.sp, 10)
+        self.assertTrue(kairo.oni)
+        self.assertEqual(kairo.oni_left, 3)
+        for _ in range(3):
+            if battle.phase == "player":
+                battle.oni_act(kairo)
+            battle.end_player_phase()
+            run_enemies(battle)
+        self.assertFalse(kairo.oni)
+        self.assertTrue(kairo.oni_move_only)
+        ok, _reason = battle.action_legal(kairo, {"type": "attack", "target": dummy.gid})
+        self.assertFalse(ok)
+
+        chanter = fighter(
+            id="lord",
+            name="Lord",
+            side="enemy",
+            pos=(2, 0),
+            hp=20,
+            max_hp=40,
+            atk=4,
+            defn=0,
+            skills=["chant"],
+            chant_style="once",
+            is_lord=True,
+            issen_immune=True,
+        )
+        crowd = [
+            fighter(id="a", name="A", pos=(2, 1), hp=30, max_hp=30, atk=8),
+            fighter(id="b", name="B", pos=(3, 1), hp=20, max_hp=20),
+        ]
+        battle = make([chanter, *crowd], w=6, h=6)
+        battle.phase = "enemy"
+        battle.enemy_act(chanter)
+        self.assertIsNotNone(chanter.chant)
+        battle.phase = "player"
+        crowd[0].acted = False
+        _events, err = battle.player_act(crowd[0].gid, crowd[0].pos, {"type": "attack", "target": chanter.gid})
+        self.assertIsNone(err)
+        self.assertIsNone(chanter.chant)
+
+    def test_every_story_fight_can_be_won(self):
+        from ashgauntlet.data import BODIES, EPISODES
+
+        save = new_game()
+        for body_id in BODIES:
+            if body_id != "soot_child":
+                save.recruit(body_id)
+        for body_id in save.roster:
+            save.units[body_id]["level"] = 18
+        save.oni_wake = True
+        for ep in EPISODES:
+            if not ep.get("battle", True):
+                continue
+            save.prepare_episode(ep["id"])
+            order = default_order(save, ep)
+            battle = build_battle(save, ep["id"], order, {}, random.Random(ep["id"] + 3))
+            for unit in battle.units:
+                if unit.id == "daughter":
+                    unit.hp = unit.max_hp = 500
+            outcome = play(battle, limit=600)
+            self.assertEqual(outcome, "win", ep["name"] + "\n" + "\n".join(battle.log[-25:]))
 
 
 if __name__ == "__main__":

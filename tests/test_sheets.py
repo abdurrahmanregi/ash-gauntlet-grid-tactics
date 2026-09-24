@@ -37,8 +37,8 @@ class SheetTests(unittest.TestCase):
         self.assertIn("does not spend", bone)
 
         cinder = joined(stone_lines("cinder", 0))
-        self.assertIn("not dropped", cinder)
-        self.assertIn("No recipe", cinder)
+        self.assertIn("Camp", cinder)
+        self.assertIn("Nest Gun needs 1", cinder)
 
         souls = joined(soul_lines(30))
         self.assertIn("30 souls", souls)
@@ -55,7 +55,10 @@ class SheetTests(unittest.TestCase):
         self.assertIn("does not add on top", sword)
         self.assertIn("button stays dark", sword)
         self.assertIn("Double Cut", sword)
-        self.assertIn("Kairo or Sword-Two", sword)
+        self.assertIn("Kairo", sword)
+        self.assertIn("Sword-Two", sword)
+        self.assertIn("Stage-Man", sword)
+        self.assertIn("Half-Blood", sword)
         self.assertNotIn("Shio", sword)
         self.assertIn("same kind of sword", sword)
 
@@ -64,7 +67,7 @@ class SheetTests(unittest.TestCase):
         self.assertIn("200 souls", light)
         self.assertIn("becomes +1", light)
         self.assertIn("never learns Double Cut", light)
-        self.assertIn("Only Shio", light)
+        self.assertIn("Shio or Dancer", light)
         self.assertNotIn("stays dark", light)
 
         charm = joined(gear_lines("paper_charm", 2, "Kairo", souls=0))
@@ -75,7 +78,9 @@ class SheetTests(unittest.TestCase):
 
         dagger = joined(gear_lines("traveler_dagger", 0))
         self.assertIn("cannot be raised", dagger)
-        self.assertIn("Only Swallow", dagger)
+        self.assertIn("Swallow", dagger)
+        self.assertIn("Deserter", dagger)
+        self.assertIn("Coil-Champion", dagger)
 
         gun = joined(gear_lines("clan_gun", 0, "Gun-Chief", souls=200))
         self.assertIn("Clan Gun +0", gun)
@@ -92,7 +97,8 @@ class SheetTests(unittest.TestCase):
         self.assertIn("You have 1", text)
         self.assertIn("not enough", text)
         self.assertIn("not souls", text)
-        self.assertIn("Kairo or Sword-Two", text)
+        self.assertIn("Kairo", text)
+        self.assertIn("Stage-Man", text)
         self.assertNotIn("Shio", text)
         spear = joined(recipe_lines("line_spear", {"ash": 2, "bone": 1}, True))
         self.assertIn("2 Ash", spear)

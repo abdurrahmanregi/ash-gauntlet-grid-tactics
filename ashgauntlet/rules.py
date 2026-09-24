@@ -71,6 +71,22 @@ class Unit:
         self.stone = None
         self.recipe = None
         self.exp_value = 0
+        self.issen_immune = False
+        self.hunt = False
+        self.twin = None
+        self.revived_round = -1
+        self.status = None
+        self.status_left = 0
+        self.status_from = None
+        self.oni = False
+        self.oni_left = 0
+        self.oni_used = False
+        self.oni_move_only = False
+        self.chant = None
+        self.chant_style = None
+        self.chanted = False
+        self.looted = False
+        self.shell_hit = False
         for key, value in kw.items():
             setattr(self, key, value)
 
@@ -98,6 +114,13 @@ class Battle:
         self.theme = "village"
         self.title = ""
         self.episode_id = 0
+        self.depth_floor = 0
+        self.win_mode = "rout"
+        self.hunt_down = False
+        self.stance = None
+        self.enemy_high_ground = False
+        self.oni_allowed = False
+        self.aura_left = 0
         self._next_gid = 1
         for unit in self.units:
             unit.gid = None
@@ -175,9 +198,16 @@ class Battle:
     def _refresh_players(self):
         self.phase = "player"
         events = []
+        if self.win_mode == "lord" and self.hunt_down and self.outcome is None:
+            self.outcome = "win"
+            self._say("The marked enemy has fallen. The fight is over.")
+            return events
         for unit in self.units:
+            unit.shell_hit = False
             if unit.alive and unit.side == "player":
                 unit.acted = False
+        if self.aura_left > 0:
+            self.aura_left -= 1
         events.extend(self._spawn())
         return events
 
@@ -252,18 +282,44 @@ class Battle:
             value += 8
         if unit.mode == "weakling":
             value -= 8
+        if unit.side == "player" and self.stance == "bird":
+            value += 3
+        if unit.side == "player" and self.aura_left > 0:
+            value += 5
         return value
 
-    def defense_power(self, unit: Unit) -> int:
+    def defense_power(self, unit: Unit, attacker: Unit | None = None) -> int:
         value = unit.defn + unit.armor_def + unit.acc_def
         if unit.mode == "defender":
             value += 8
+        if unit.side == "player" and self.aura_left > 0:
+            value += 5
+        if (
+            attacker is not None
+            and attacker.side == "player"
+            and self.stance == "coil"
+            and attacker.weapon_family in ("spear", "gun")
+        ):
+            value = max(0, value - 4)
         return value
 
-    def preview_damage(self, attacker: Unit, defender: Unit) -> int:
-        damage = max(1, self.attack_power(attacker) - self.defense_power(defender))
+    def _high_ground(self, attacker: Unit, defender: Unit) -> bool:
+        if self.height(attacker.pos) <= self.height(defender.pos):
+            return False
+        if attacker.side == "player" and self.stance == "fang":
+            return True
+        if attacker.side == "enemy" and self.enemy_high_ground:
+            return True
+        return False
+
+    def preview_damage(self, attacker: Unit, defender: Unit, first: bool = True) -> int:
+        damage = max(1, self.attack_power(attacker) - self.defense_power(defender, attacker))
         if defender.mode == "target":
             damage += 4
+        if first and self._high_ground(attacker, defender):
+            damage += 6
+        if self.stance == "shell" and not defender.shell_hit:
+            damage = max(1, damage // 2)
         return damage
 
     def _add_enemy(self, unit, origin, pos, out):
@@ -352,12 +408,18 @@ class Battle:
         foes = self.living("enemy" if unit.side == "player" else "player")
         return [foe for foe in foes if self.clear_line(pos, foe.pos, reach)]
 
+    def skill_cost(self, unit, skill_id) -> int:
+        skill = SKILLS[skill_id]
+        if skill["kind"] == "oni":
+            return unit.max_sp // 2
+        return int(skill["sp"])
+
     def skill_options(self, unit, pos, skill_id):
         skill = SKILLS[skill_id]
         tiles = set()
         gids = []
         ok = False
-        if unit.sp < skill["sp"] or skill_id not in unit.skills:
+        if skill_id not in unit.skills or unit.sp < self.skill_cost(unit, skill_id):
             return {"tiles": tiles, "gids": gids, "ok": False}
         kind = skill["kind"]
         if kind == "line":
@@ -410,6 +472,43 @@ class Battle:
                 gids.append(tgt.gid)
                 tiles.add(tgt.pos)
             ok = bool(gids)
+        elif kind == "cross":
+            for direction in ORTHO:
+                back = (-direction[0], -direction[1])
+                if not (
+                    self.line_targets(unit, pos, direction, skill["length"])
+                    or self.line_targets(unit, pos, back, skill["length"])
+                ):
+                    continue
+                for spot in self.line_tiles(pos, direction, skill["length"]):
+                    tiles.add(spot)
+                for spot in self.line_tiles(pos, back, skill["length"]):
+                    tiles.add(spot)
+            ok = bool(tiles)
+        elif kind == "status":
+            targets = (
+                self.bolt_targets(unit, pos, skill.get("length", 5))
+                if skill.get("aim") == "bolt"
+                else self.melee_targets(unit, pos)
+            )
+            for tgt in targets:
+                gids.append(tgt.gid)
+                tiles.add(tgt.pos)
+            ok = bool(gids)
+        elif kind == "steal":
+            for tgt in self.melee_targets(unit, pos):
+                if tgt.is_lord:
+                    continue
+                if tgt.stone or (tgt.recipe and tgt.recipe not in self.loot_recipes):
+                    gids.append(tgt.gid)
+                    tiles.add(tgt.pos)
+            ok = bool(gids)
+        elif kind == "aura":
+            ok = bool(self.living(unit.side))
+        elif kind == "oni":
+            ok = self.oni_allowed and unit.id == "kairo" and not unit.oni_used and not unit.oni
+        elif kind == "chant":
+            ok = False
         return {"tiles": tiles, "gids": gids, "ok": ok}
 
     def _hurt_allies_near(self, unit, pos, radius) -> bool:
@@ -435,6 +534,8 @@ class Battle:
 
     def action_legal(self, unit, action):
         kind = action.get("type")
+        if unit.oni_move_only and kind != "wait":
+            return False, "Oni-Wake has ended. This turn they can only move."
         if kind == "wait":
             return True, ""
         if kind == "issen":
@@ -454,17 +555,27 @@ class Battle:
             if skill_id not in unit.skills or skill_id not in SKILLS:
                 return False, "They do not know that."
             skill = SKILLS[skill_id]
-            if unit.sp < skill["sp"]:
+            if unit.sp < self.skill_cost(unit, skill_id):
                 return False, "Not enough spirit."
             opts = self.skill_options(unit, unit.pos, skill_id)
-            if skill["kind"] == "line":
+            if skill["kind"] in ("line", "cross"):
                 direction = tuple(action.get("dir", ()))
-                if direction not in ORTHO or not self.line_targets(unit, unit.pos, direction, skill["length"]):
+                if direction not in ORTHO:
+                    return False, "Nobody is standing on that line."
+                back = (-direction[0], -direction[1])
+                forward = self.line_targets(unit, unit.pos, direction, skill["length"])
+                if skill["kind"] == "line" and not forward:
+                    return False, "Nobody is standing on that line."
+                if skill["kind"] == "cross" and not forward and not self.line_targets(
+                    unit, unit.pos, back, skill["length"]
+                ):
                     return False, "Nobody is standing on that line."
                 return True, ""
-            if skill["kind"] in ("heal", "multi", "bolt", "mode_target", "salvo"):
+            if skill["kind"] in ("heal", "multi", "bolt", "mode_target", "salvo", "status", "steal"):
                 if action.get("target") not in opts["gids"]:
                     return False, "Choose a valid target."
+                return True, ""
+            if skill["kind"] == "chant":
                 return True, ""
             if not opts["ok"]:
                 return False, "That will not do anything."
@@ -477,10 +588,26 @@ class Battle:
             return True, ""
         return False, "That is not an action."
 
-    def begin_turn(self, unit: Unit) -> None:
+    def begin_turn(self, unit: Unit):
+        events = []
         if unit.issen:
             unit.issen = False
             self._say(f"{unit.name}'s Issen fades.")
+        if unit.status == "poison" and unit.alive:
+            source = self.unit_by_gid(unit.status_from) if unit.status_from else None
+            events.extend(self.apply_damage(source, unit, amount=3))
+            unit.status_left -= 1
+            if unit.status_left <= 0 or not unit.alive:
+                unit.status = None
+                unit.status_from = None
+        if unit.alive and unit.status in ("sleep", "confuse", "para"):
+            word = {"sleep": "asleep", "confuse": "confused", "para": "paralyzed"}[unit.status]
+            self._say(f"{unit.name} is {word} and does nothing.")
+            unit.status_left -= 1
+            if unit.status_left <= 0:
+                unit.status = None
+                unit.status_from = None
+        return events
 
     def finish_turn(self, unit: Unit) -> None:
         if not unit.mode:
@@ -510,8 +637,17 @@ class Battle:
             return [], "They already acted."
         return self.apply_act(unit, dest, action)
 
-    def apply_act(self, unit: Unit, dest, action):
+    def apply_act(self, unit: Unit, dest, action, auto=False):
         dest = (int(dest[0]), int(dest[1]))
+        if unit.oni and not unit.oni_move_only and not auto:
+            return [], "Oni-Wake is moving on its own."
+        frozen = unit.status in ("sleep", "confuse", "para")
+        if frozen and dest != unit.pos:
+            return [], "They cannot move."
+        if frozen and action.get("type") != "wait":
+            return [], "They are unable to act."
+        if unit.oni_move_only and action.get("type") != "wait":
+            return [], "Oni-Wake has ended. This turn they can only move."
         stand, prev = self.movement(unit)
         if dest not in stand:
             return [], "That tile is out of reach."
@@ -522,15 +658,18 @@ class Battle:
         if not ok:
             unit.pos = saved
             return [], reason
-        self.begin_turn(unit)
+        opening = self.begin_turn(unit)
         unit.pos = dest
         if len(path) >= 2:
             unit.facing = (path[-1][0] - path[-2][0], path[-1][1] - path[-2][1])
-        events = []
+        events = list(opening)
         if path != [saved]:
             events.append({"t": "move", "gid": unit.gid, "path": path})
-        events.extend(self.resolve(unit, action))
+        if unit.alive and self.outcome is None:
+            events.extend(self.resolve(unit, action))
         self.finish_turn(unit)
+        if unit.oni_move_only:
+            unit.oni_move_only = False
         unit.acted = True
         if self.outcome:
             events.append({"t": "over", "outcome": self.outcome})
@@ -567,7 +706,7 @@ class Battle:
         melee = self.is_adjacent(attacker.pos, defender.pos) and attacker.weapon_family in ISSEN_FAMILIES
         if defender.issen and melee:
             defender.issen = False
-            if attacker.is_lord:
+            if attacker.is_lord or attacker.issen_immune:
                 self._say(f"{attacker.name} breaks the Issen and still strikes.")
                 return self.apply_damage(attacker, defender)
             self._say(f"{defender.name} answers with Issen. {attacker.name} falls.")
@@ -594,11 +733,20 @@ class Battle:
             }]
         return self.apply_damage(attacker, defender)
 
-    def apply_damage(self, attacker, defender, amount=None):
+    def apply_damage(self, attacker, defender, amount=None, first=True, flat=0):
         if defender is None or not defender.alive:
             return []
         if amount is None:
-            amount = self.preview_damage(attacker, defender)
+            amount = self.preview_damage(attacker, defender, first=first) + flat
+            if self.stance == "shell" and not defender.shell_hit and amount > 0:
+                defender.shell_hit = True
+        if amount > 0 and defender.status == "sleep":
+            defender.status = None
+            defender.status_left = 0
+            defender.status_from = None
+        if amount > 0 and defender.chant:
+            defender.chant = None
+            self._say(f"{defender.name}'s chant breaks.")
         defender.hp -= amount
         events = [{
             "t": "hit",
@@ -608,7 +756,7 @@ class Battle:
             "hp": defender.hp,
             "miss": False,
         }]
-        name = attacker.name if attacker else "Something"
+        name = attacker.name if attacker else "Poison"
         self._say(f"{name} hits {defender.name} for {amount}.")
         if defender.hp <= 0:
             events.extend(self.kill(defender, attacker, issen=False))
@@ -624,23 +772,26 @@ class Battle:
     def kill(self, victim, killer, issen=False):
         victim.hp = 0
         victim.alive = False
+        victim.chant = None
         events = [{"t": "die", "gid": victim.gid}]
-        if killer and killer.side == "player" and victim.side == "enemy":
+        if killer and killer.side == "player" and victim.side == "enemy" and not victim.looted:
+            victim.looted = True
             if victim.is_lord:
                 souls = 100
-            elif issen:
-                souls = 40
+                self.loot_stones.extend(["void", "void"])
             else:
-                souls = 10
-            self.loot_souls += souls
-            if victim.stone:
-                self.loot_stones.append(victim.stone)
+                souls = 40 if issen else 10
+                if victim.stone:
+                    self.loot_stones.append(victim.stone)
             if victim.recipe and victim.recipe not in self.loot_recipes:
                 self.loot_recipes.append(victim.recipe)
             self.loot_exp[killer.id] = self.loot_exp.get(killer.id, 0) + victim.exp_value
+            self.loot_souls += souls
             self._say(f"{victim.name} falls. Souls +{souls}.")
         else:
             self._say(f"{victim.name} falls.")
+        if victim.hunt:
+            self.hunt_down = True
         if victim.id == "kairo" or (victim.lose_flag and victim.side == "player"):
             self.outcome = "lose"
             self._say("The march is over.")
@@ -651,7 +802,7 @@ class Battle:
 
     def resolve_skill(self, unit, action):
         skill = SKILLS[action["skill"]]
-        unit.sp -= skill["sp"]
+        unit.sp -= self.skill_cost(unit, action["skill"])
         kind = skill["kind"]
         self._say(f"{unit.name} uses {skill['name']}.")
         if kind == "mode":
@@ -677,10 +828,12 @@ class Battle:
             target = self.unit_by_gid(action["target"])
             unit.facing = facing_toward(unit.pos, target.pos)
             events = []
-            for _ in range(skill["hits"]):
+            for index in range(skill["hits"]):
                 if not target.alive or self.outcome == "lose":
                     break
-                events.extend(self.apply_damage(unit, target))
+                events.extend(
+                    self.apply_damage(unit, target, first=(index == 0), flat=skill.get("flat", 0))
+                )
             return events
         if kind == "bolt":
             target = self.unit_by_gid(action["target"])
@@ -694,6 +847,45 @@ class Battle:
             return self._heal_near(unit, skill["ratio"], skill["radius"])
         if kind == "heal_all":
             return self._heal_near(unit, skill["ratio"], 99)
+        if kind == "cross":
+            direction = tuple(action["dir"])
+            back = (-direction[0], -direction[1])
+            unit.facing = direction
+            seen = []
+            hits = self.line_targets(unit, unit.pos, direction, skill["length"])
+            hits += self.line_targets(unit, unit.pos, back, skill["length"])
+            for tgt in hits:
+                if tgt.gid not in seen:
+                    seen.append(tgt.gid)
+            return self._hit_many(unit, [self.unit_by_gid(gid) for gid in seen])
+        if kind == "status":
+            target = self.unit_by_gid(action["target"])
+            target.status = skill["status"]
+            target.status_left = 2
+            target.status_from = unit.gid
+            unit.facing = facing_toward(unit.pos, target.pos)
+            self._say(f"{target.name} is struck by {skill['name']}.")
+            return [{"t": "mode", "gid": target.gid, "mode": skill["status"]}]
+        if kind == "steal":
+            return self._steal(unit, self.unit_by_gid(action["target"]))
+        if kind == "aura":
+            self.aura_left = 2
+            self._say("Aura covers the allies.")
+            return [{"t": "mode", "gid": unit.gid, "mode": "aura"}]
+        if kind == "oni":
+            unit.oni = True
+            unit.oni_left = 3
+            unit.oni_used = True
+            self._say(f"{unit.name} wakes the gauntlet.")
+            return [{"t": "oni", "gid": unit.gid}]
+        if kind == "chant":
+            center = tuple(action.get("center", unit.pos))
+            radius = int(action.get("radius", 2))
+            unit.chant = (int(center[0]), int(center[1]), radius)
+            if unit.chant_style == "once":
+                unit.chanted = True
+            self._say(f"{unit.name} begins to chant.")
+            return [{"t": "chant", "gid": unit.gid}]
         return []
 
     def _hit_many(self, unit, targets):
@@ -756,17 +948,37 @@ class Battle:
             unit = self.unit_by_gid(gid)
             if unit and unit.alive and unit.side == "enemy":
                 return self.enemy_act(unit)
+        events = self._tick_oni()
         self.rnd += 1
-        events = self._refresh_players()
+        events.extend(self._refresh_players())
+        if self.outcome:
+            events.append({"t": "over", "outcome": self.outcome})
+            return events
         events.append({"t": "phase", "phase": "player", "round": self.rnd})
         return events
 
     def enemy_act(self, unit: Unit):
-        dest, action = self.choose_enemy_action(unit)
+        revived = self._twin_revive(unit)
+        if unit.chant:
+            events = revived + self.begin_turn(unit)
+            if unit.alive and self.outcome is None:
+                events.extend(self._release_chant(unit))
+            self.finish_turn(unit)
+            unit.acted = True
+            if self.outcome:
+                events.append({"t": "over", "outcome": self.outcome})
+            return events
+        plan = self._chant_plan(unit)
+        if plan is not None:
+            dest, action = plan
+        elif unit.status in ("sleep", "confuse", "para"):
+            dest, action = unit.pos, {"type": "wait"}
+        else:
+            dest, action = self.choose_enemy_action(unit)
         events, err = self.apply_act(unit, dest, action)
         if err:
             events, _err = self.apply_act(unit, unit.pos, {"type": "wait"})
-        return events
+        return revived + events
 
     def _target_key(self, attacker, target):
         flag = 1 if (target.lose_flag or target.id == "kairo") else 0
@@ -794,6 +1006,11 @@ class Battle:
         if best_line and best_line[0] >= 2:
             _count, _key, dest, direction = best_line
             return dest, {"type": "skill", "skill": "line_3", "dir": direction}
+        if best_attack and "two_hit" in unit.skills and unit.sp >= SKILLS["two_hit"]["sp"]:
+            _key, dest, target = best_attack
+            melee = {foe.gid for foe in self.melee_targets(unit, dest)}
+            if target.gid in melee and target.hp * 2 < target.max_hp:
+                return dest, {"type": "skill", "skill": "two_hit", "target": target.gid}
         if best_attack:
             _key, dest, target = best_attack
             return dest, {"type": "attack", "target": target.gid}
@@ -806,3 +1023,181 @@ class Battle:
         goal = min(foes, key=lambda foe: manhattan(foe.pos, unit.pos))
         dest = min(stand, key=lambda tile: (manhattan(tile, goal.pos), stand[tile]))
         return dest, {"type": "wait"}
+
+    def _tick_oni(self):
+        events = []
+        for unit in self.living("player"):
+            if not unit.oni:
+                continue
+            unit.oni_left -= 1
+            if unit.oni_left <= 0:
+                unit.oni = False
+                unit.oni_move_only = True
+                self._say(f"{unit.name}'s Oni-Wake ends. Next turn, move only.")
+                events.append({"t": "oni_end", "gid": unit.gid})
+        return events
+
+    def _twin_revive(self, actor: Unit):
+        if not actor.twin or not actor.alive:
+            return []
+        partner = next((unit for unit in self.units if unit.id == actor.twin), None)
+        if partner is None or partner.alive or partner.revived_round == self.rnd:
+            return []
+        spot = None
+        for dx, dy in ORTHO:
+            nxt = (actor.pos[0] + dx, actor.pos[1] + dy)
+            if self.is_free(nxt) and self.height_ok(actor.pos, nxt):
+                spot = nxt
+                break
+        if spot is None:
+            return []
+        partner.revived_round = self.rnd
+        partner.alive = True
+        partner.hp = max(1, partner.max_hp // 2)
+        partner.pos = spot
+        partner.acted = False
+        self._say(f"{partner.name} stands again.")
+        return [{"t": "spawn", "gid": partner.gid}]
+
+    def _chant_plan(self, unit: Unit):
+        if unit.chant or unit.chant_style not in ("once", "full") or "chant" not in unit.skills:
+            return None
+        if unit.chant_style == "once":
+            if unit.chanted or unit.hp * 2 > unit.max_hp:
+                return None
+            radius = 1
+            need = 1
+        else:
+            if unit.hp * 2 <= unit.max_hp:
+                return None
+            radius = 2
+            need = 3
+        best = None
+        for y in range(self.h):
+            for x in range(self.w):
+                center = (x, y)
+                if manhattan(unit.pos, center) > 6 or center in self.blocked:
+                    continue
+                if not self.height_ok(unit.pos, center):
+                    continue
+                count = 0
+                for ally in self.living("player"):
+                    if manhattan(ally.pos, center) <= radius and self.height_ok(center, ally.pos):
+                        count += 1
+                if count >= need and (best is None or count > best[0]):
+                    best = (count, center, radius)
+        if best is None:
+            return None
+        _count, center, radius = best
+        return unit.pos, {"type": "skill", "skill": "chant", "center": center, "radius": radius}
+
+    def _release_chant(self, unit: Unit):
+        if not unit.chant:
+            return []
+        cx, cy, radius = unit.chant
+        unit.chant = None
+        self._say(f"{unit.name}'s chant lands.")
+        events = [{"t": "chant_land", "gid": unit.gid}]
+        for ally in list(self.living("player")):
+            if manhattan(ally.pos, (cx, cy)) <= radius and self.height_ok((cx, cy), ally.pos):
+                events.extend(self.apply_damage(unit, ally, amount=max(1, ally.hp)))
+                if self.outcome:
+                    break
+        return events
+
+    def chant_marks(self):
+        marks = []
+        for unit in self.living("enemy"):
+            if not unit.chant:
+                continue
+            cx, cy, radius = unit.chant
+            for y in range(cy - radius, cy + radius + 1):
+                for x in range(cx - radius, cx + radius + 1):
+                    spot = (x, y)
+                    if self.in_bounds(spot) and manhattan(spot, (cx, cy)) <= radius:
+                        marks.append(spot)
+        return marks
+
+    def _steal(self, unit, target):
+        if target is None:
+            return []
+        unit.facing = facing_toward(unit.pos, target.pos)
+        options = []
+        if target.stone:
+            options.append("stone")
+        if target.recipe and target.recipe not in self.loot_recipes:
+            options.append("recipe")
+        if not options or target.is_lord:
+            self._say(f"{unit.name} finds nothing to take.")
+            return []
+        pick = self.rng.choice(options)
+        if pick == "stone":
+            self.loot_stones.append(target.stone)
+            self._say(f"{unit.name} takes the stone.")
+            target.stone = None
+        else:
+            self.loot_recipes.append(target.recipe)
+            self._say(f"{unit.name} takes a recipe.")
+            target.recipe = None
+        return [{"t": "steal", "gid": target.gid}]
+
+    def auto_opening(self):
+        if self.outcome or self.phase != "player":
+            return None
+        for unit in self.units:
+            if not (unit.alive and unit.side == "player" and not unit.acted):
+                continue
+            if unit.oni and not unit.oni_move_only:
+                return self.oni_act(unit)
+            if unit.status in ("sleep", "confuse", "para"):
+                events, _err = self.apply_act(unit, unit.pos, {"type": "wait"})
+                return events
+        return None
+
+    def oni_act(self, unit: Unit):
+        foes = [u for u in self.living("enemy") if u.is_lord or u.hunt]
+        if not foes:
+            foes = self.living("enemy")
+        stand, _prev = self.movement(unit)
+        best = None
+        if foes:
+            goal = min(foes, key=lambda foe: manhattan(unit.pos, foe.pos))
+            for dest in stand:
+                for target in self.attack_targets(unit, dest):
+                    damage = self.preview_damage(unit, target)
+                    score = damage + (800 if target.gid == goal.gid or target.is_lord or target.hunt else 0)
+                    if damage >= target.hp:
+                        score += 400
+                    plan = (score, dest, {"type": "attack", "target": target.gid})
+                    if best is None or plan[0] > best[0]:
+                        best = plan
+                for skill_id in unit.skills:
+                    skill = SKILLS[skill_id]
+                    if unit.sp < self.skill_cost(unit, skill_id):
+                        continue
+                    if skill["kind"] == "line":
+                        for direction in ORTHO:
+                            hits = self.line_targets(unit, dest, direction, skill["length"])
+                            if not hits:
+                                continue
+                            score = sum(self.preview_damage(unit, hit) for hit in hits)
+                            plan = (score, dest, {"type": "skill", "skill": skill_id, "dir": direction})
+                            if best is None or plan[0] > best[0]:
+                                best = plan
+                    elif skill["kind"] == "multi":
+                        for target in self.melee_targets(unit, dest):
+                            damage = self.preview_damage(unit, target) + skill.get("flat", 0)
+                            score = damage * skill["hits"]
+                            plan = (score, dest, {"type": "skill", "skill": skill_id, "target": target.gid})
+                            if best is None or plan[0] > best[0]:
+                                best = plan
+            if best is None:
+                dest = min(stand, key=lambda tile: manhattan(tile, goal.pos))
+                best = (0, dest, {"type": "wait"})
+        if best is None:
+            best = (0, unit.pos, {"type": "wait"})
+        _score, dest, action = best
+        events, err = self.apply_act(unit, dest, action, auto=True)
+        if err:
+            events, _err = self.apply_act(unit, unit.pos, {"type": "wait"}, auto=True)
+        return events

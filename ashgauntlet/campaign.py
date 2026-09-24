@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ashgauntlet.data import (
     BODIES,
+    DEPTHS,
     ENEMIES,
     GEAR,
     RECIPES,
@@ -16,8 +17,17 @@ from ashgauntlet.data import (
     episode,
     gear_bonus,
     grid_from_rows,
+    level_label,
     next_enhance_cost,
 )
+
+STANCES = {
+    "fang": "White Fang",
+    "bird": "Cinder Bird",
+    "coil": "River Coil",
+    "shell": "Stone Shell",
+}
+STANCE_AFTER = {7: "fang", 11: "bird", 15: "coil", 18: "shell"}
 from ashgauntlet.rules import Battle, Unit
 
 
@@ -40,6 +50,10 @@ class Save:
         self.units = {}
         self.cleared = []
         self.next_episode = 1
+        self.stances = []
+        self.stance = None
+        self.oni_wake = False
+        self.depths_cleared = 0
         self._next_uid = 1
 
     def to_dict(self) -> dict:
@@ -58,6 +72,10 @@ class Save:
             "cleared": list(self.cleared),
             "next_episode": self.next_episode,
             "next_uid": self._next_uid,
+            "stances": list(self.stances),
+            "stance": self.stance,
+            "oni_wake": self.oni_wake,
+            "depths_cleared": self.depths_cleared,
         }
 
     @classmethod
@@ -74,6 +92,10 @@ class Save:
         save.cleared = list(data.get("cleared", []))
         save.next_episode = int(data.get("next_episode", 1))
         save._next_uid = int(data.get("next_uid", 1))
+        save.stances = [key for key in data.get("stances", []) if key in STANCES]
+        save.stance = data.get("stance") if data.get("stance") in STANCES else None
+        save.oni_wake = bool(data.get("oni_wake", False))
+        save.depths_cleared = int(data.get("depths_cleared", 0))
         for raw in data.get("gear", []):
             save.gear.append(Gear(int(raw["uid"]), raw["kind"], int(raw.get("plus", 0)), raw.get("owner")))
         return save
@@ -174,9 +196,10 @@ class Save:
         return True
 
     def prepare_episode(self, episode_id: int) -> None:
-        for body_id in episode(episode_id)["recruit_before"]:
+        ep = episode(episode_id)
+        for body_id in ep["recruit_before"]:
             self.recruit(body_id)
-        if self.herbs < 4:
+        if ep.get("battle", True) and self.herbs < 4:
             self.herbs += 2
 
     def grant_exp(self, exp_map: dict) -> list[str]:
@@ -193,9 +216,49 @@ class Save:
                 notes.append(f"{body['name']} reaches level {record['level']}.")
         return notes
 
-    def finish_victory(self, episode_id: int, battle: Battle) -> list[str]:
-        for body_id in episode(episode_id)["recruit_after"]:
+    def finish_victory(self, episode_id: int, battle: Battle | None) -> list[str]:
+        ep = episode(episode_id)
+        for body_id in ep["recruit_after"]:
             self.recruit(body_id)
+        notes = []
+        recipes = battle.loot_recipes if battle else []
+        exp_map = battle.loot_exp if battle else {}
+        souls = battle.loot_souls if battle else 0
+        stones = battle.loot_stones if battle else []
+        for recipe_id in recipes:
+            if recipe_id not in self.recipes and recipe_id in RECIPES:
+                self.recipes.append(recipe_id)
+                notes.append(f"Recipe learned: {RECIPES[recipe_id]['name']}.")
+        notes.extend(self.grant_exp(exp_map))
+        self.souls += souls
+        for stone in stones:
+            self.stones[stone] = self.stones.get(stone, 0) + 1
+        if episode_id not in self.cleared:
+            self.cleared.append(episode_id)
+        self.next_episode = max(self.next_episode, episode_id + 1)
+        unlocked = STANCE_AFTER.get(episode_id)
+        if unlocked and unlocked not in self.stances:
+            self.stances.append(unlocked)
+            notes.append(f"Stance unlocked: {STANCES[unlocked]}. Only one stance can be on.")
+        if episode_id == 9 and not self.oni_wake:
+            self.oni_wake = True
+            notes.append("Oni-Wake is unlocked for Kairo.")
+        if souls:
+            notes.append(
+                f"Souls kept: {souls}. Souls only raise a piece you already own."
+            )
+        if stones:
+            names = [STONES[stone]["name"] if stone in STONES else stone for stone in stones]
+            notes.append(
+                "Stones kept: "
+                + ", ".join(names)
+                + ". Stones make a new piece in the workshop. Pawns drop Ash. Gunners drop Ash too. Spear fighters drop Bone. Camp beasts drop Cinder. Lords drop two Void."
+            )
+        if not ep.get("battle", True):
+            notes.append("The gauntlet is quiet. Every level can be walked again.")
+        return notes
+
+    def finish_depth(self, floor: int, battle: Battle) -> list[str]:
         notes = []
         for recipe_id in battle.loot_recipes:
             if recipe_id not in self.recipes and recipe_id in RECIPES:
@@ -205,20 +268,15 @@ class Save:
         self.souls += battle.loot_souls
         for stone in battle.loot_stones:
             self.stones[stone] = self.stones.get(stone, 0) + 1
-        if episode_id not in self.cleared:
-            self.cleared.append(episode_id)
-        self.next_episode = max(self.next_episode, episode_id + 1)
+        if floor > self.depths_cleared:
+            self.depths_cleared = floor
         if battle.loot_souls:
-            notes.append(
-                f"Souls kept: {battle.loot_souls}. Souls only raise a piece you already own."
-            )
-        if battle.loot_stones:
-            names = [STONES[stone]["name"] if stone in STONES else stone for stone in battle.loot_stones]
-            notes.append(
-                "Stones kept: "
-                + ", ".join(names)
-                + ". Stones make a new piece in the workshop. Pawns drop Ash. Gunners drop Ash too. Spear fighters drop Bone."
-            )
+            notes.append(f"Souls kept: {battle.loot_souls}. This floor does not open the next story fight.")
+        if floor == 12 and "soot_child" not in self.roster:
+            self.recruit("soot_child")
+            notes.append("Soot-Child joins at level 1.")
+        elif floor == 12:
+            notes.append("Soot-Child is already with you.")
         return notes
 
 
@@ -254,11 +312,13 @@ def _piece_name(gear: Gear | None) -> str:
     return f"{GEAR[gear.kind]['name']} +{gear.plus}"
 
 
-def _skills_for(body_id: str, level: int, gears: list[Gear | None]) -> list[str]:
+def _skills_for(body_id: str, level: int, gears: list[Gear | None], oni: bool = False) -> list[str]:
     known = []
     for skill_id, needed in BODIES[body_id]["skills"]:
         if level >= needed and skill_id in SKILLS and skill_id not in known:
             known.append(skill_id)
+    if oni and body_id == "kairo" and "oni_wake" not in known:
+        known.append("oni_wake")
     for gear in gears:
         if gear is None:
             continue
@@ -307,7 +367,7 @@ def materialize(save: Save, body_id: str, pos, lose_flag: bool = False) -> Unit:
         charm_plus=charm.plus if charm else 0,
         level=record["level"],
         exp=record["exp"],
-        skills=_skills_for(body_id, record["level"], [weapon, armor, charm]),
+        skills=_skills_for(body_id, record["level"], [weapon, armor, charm], oni=bool(save.oni_wake)),
         lose_flag=lose_flag or body_id == "kairo",
     )
 
@@ -343,24 +403,61 @@ def fresh_unit(body_id: str, pos, lose_flag: bool = False) -> Unit:
 
 def make_enemy(spec: dict) -> Unit:
     kind = ENEMIES[spec["kind"]]
+    skills = list(spec.get("skills", kind["skills"]))
+    chant = spec.get("chant")
+    if chant and "chant" not in skills:
+        skills.append("chant")
+    stone = spec["stone"] if "stone" in spec else kind["stone"]
+    hp = int(spec.get("hp", kind["hp"]))
+    sp = int(spec.get("sp", kind["sp"]))
     return Unit(
-        id=f"{spec['kind']}{spec['pos']}",
-        name=kind["name"],
+        id=spec.get("id", f"{spec['kind']}{spec['pos']}"),
+        name=spec.get("name", kind["name"]),
         side="enemy",
-        sprite=kind["sprite"],
+        sprite=spec.get("sprite", kind["sprite"]),
         pos=tuple(spec["pos"]),
-        hp=kind["hp"],
-        max_hp=kind["hp"],
-        sp=kind["sp"],
-        max_sp=kind["sp"],
-        atk=kind["atk"],
-        defn=kind["defn"],
-        mov=kind["mov"],
-        weapon_family=kind["family"],
-        skills=list(kind["skills"]),
-        stone=kind["stone"],
+        hp=hp,
+        max_hp=hp,
+        sp=sp,
+        max_sp=sp,
+        atk=int(spec.get("atk", kind["atk"])),
+        defn=int(spec.get("defn", kind["defn"])),
+        mov=int(spec.get("mov", kind["mov"])),
+        weapon_family=spec.get("family", kind["family"]),
+        skills=skills,
+        stone=stone,
         recipe=spec.get("recipe"),
-        exp_value=kind["exp"],
+        exp_value=int(spec.get("exp", kind["exp"])),
+        is_lord=bool(spec.get("lord", False)),
+        issen_immune=bool(spec.get("immune", False)),
+        hunt=bool(spec.get("hunt", False)),
+        twin=spec.get("twin"),
+        chant_style=chant,
+    )
+
+
+def make_ward(spec: dict) -> Unit:
+    hp = int(spec["hp"])
+    return Unit(
+        id=spec["id"],
+        name=spec["name"],
+        side="player",
+        sprite=spec.get("sprite", "daughter"),
+        pos=tuple(spec["pos"]),
+        hp=hp,
+        max_hp=hp,
+        sp=0,
+        max_sp=0,
+        atk=int(spec.get("atk", 4)),
+        defn=int(spec.get("defn", 2)),
+        mov=int(spec.get("mov", 4)),
+        weapon_family=spec.get("family", "light_sword"),
+        weapon_name="Short Blade",
+        skills=[],
+        items=[None, None],
+        lose_flag=True,
+        level=1,
+        exp=0,
     )
 
 
@@ -386,8 +483,47 @@ def build_battle(save: Save, episode_id: int, order: list[str], items: dict, rng
         if spec.get("gift_herb") and spec["body"] not in save.roster:
             guest.items = ["herb", None]
         reinforcements.append({"round": spec["round"], "pos": tuple(spec["pos"]), "unit": guest})
+    for spec in ep.get("guests", []):
+        units.append(make_ward(spec))
     battle = Battle(width, height, heights, ep["blocked"], units, reinforcements, rng or random.Random())
     battle.theme = ep["theme"]
-    battle.title = ep["name"]
+    battle.title = level_label(episode_id, ep["name"])
     battle.episode_id = episode_id
+    battle.win_mode = ep.get("win", "rout")
+    battle.enemy_high_ground = episode_id >= 6
+    battle.stance = save.stance if save.stance in STANCES else None
+    battle.oni_allowed = bool(save.oni_wake)
+    return battle
+
+
+def depth_unlocked(save: Save, floor: int) -> bool:
+    if floor < 1 or floor > len(DEPTHS):
+        return False
+    if floor <= 4:
+        opened = 13 in save.cleared
+    elif floor <= 8:
+        opened = 18 in save.cleared
+    else:
+        opened = 22 in save.cleared
+    return opened and floor <= save.depths_cleared + 1
+
+
+def build_depth(save: Save, floor: int, order: list[str], items: dict, rng=None) -> Battle:
+    spec = DEPTHS[floor - 1]
+    heights, width, height = grid_from_rows(spec["heights"])
+    units = []
+    for index, body_id in enumerate(order):
+        unit = materialize(save, body_id, spec["slots"][index], lose_flag=(body_id == "kairo"))
+        unit.items = list(items.get(body_id, [None, None]))
+        units.append(unit)
+    for enemy in spec["enemies"]:
+        units.append(make_enemy(enemy))
+    battle = Battle(width, height, heights, spec["blocked"], units, [], rng or random.Random())
+    battle.theme = spec["theme"]
+    battle.title = f"Depths {floor} - Hollow Stone"
+    battle.episode_id = 0
+    battle.depth_floor = floor
+    battle.win_mode = "rout"
+    battle.stance = save.stance if save.stance in STANCES else None
+    battle.oni_allowed = bool(save.oni_wake)
     return battle

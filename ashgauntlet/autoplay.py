@@ -21,6 +21,10 @@ def choose(battle, unit):
 
     if unit.id == "shio":
         return _choose_shio(battle, unit, stand, foes, allies)
+    if unit.lose_flag and unit.id != "kairo" and foes and stand:
+        goal = min(foes, key=lambda foe: manhattan(unit.pos, foe.pos))
+        dest = max(stand, key=lambda tile: (manhattan(tile, goal.pos), -manhattan(tile, unit.pos)))
+        return dest, {"type": "wait"}
 
     best = None
     for dest in stand:
