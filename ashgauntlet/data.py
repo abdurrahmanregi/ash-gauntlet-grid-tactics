@@ -1,4 +1,4 @@
-"""Static rules data for the first march. Names stay synthetic."""
+"""Static rules data. Names stay synthetic."""
 
 from __future__ import annotations
 
@@ -104,6 +104,30 @@ SKILLS = {
         "length": 4,
         "blurb": "An enemy in a line is worse with bows and guns.",
     },
+    "shot_2": {
+        "name": "Twin Shot",
+        "sp": 14,
+        "kind": "salvo",
+        "hits": 2,
+        "length": 5,
+        "blurb": "Two shots on one enemy in gun range. Not two enemies.",
+    },
+    "shot_3": {
+        "name": "Triple Shot",
+        "sp": 24,
+        "kind": "salvo",
+        "hits": 3,
+        "length": 5,
+        "blurb": "Three shots on one enemy in gun range.",
+    },
+    "salvo_8": {
+        "name": "Eight Salvo",
+        "sp": 36,
+        "kind": "salvo",
+        "hits": 8,
+        "length": 5,
+        "blurb": "Eight shots on one enemy in gun range, not eight enemies.",
+    },
 }
 
 # Soul cost to reach the tier, then the total bonus at that tier.
@@ -113,6 +137,7 @@ CURVES = {
     "spear": [(200, 2), (400, 4), (800, 6), (1200, 8)],
     "coat": [(150, 1), (300, 2), (500, 3), (800, 4)],
     "charm": [(150, 1), (300, 2)],
+    "gun": [(300, 2), (600, 4), (1000, 6), (1600, 8)],
 }
 
 GEAR = {
@@ -147,6 +172,14 @@ GEAR = {
         "curve": None,
         "gate": None,
         "skill": None,
+    },
+    "clan_gun": {
+        "name": "Clan Gun",
+        "slot": "weapon",
+        "family": "gun",
+        "curve": "gun",
+        "gate": 4,
+        "skill": "shot_3",
     },
     "ash_blade": {
         "name": "Ash Blade",
@@ -185,7 +218,7 @@ GEAR = {
 STONES = {
     "ash": {
         "name": "Ash",
-        "source": "A Pawn drops one Ash when they fall.",
+        "source": "A Pawn or a Gunner drops one Ash when they fall.",
         "use": "Every recipe in the workshop spends Ash.",
     },
     "bone": {
@@ -195,12 +228,12 @@ STONES = {
     },
     "cinder": {
         "name": "Cinder",
-        "source": "Cinder is not dropped on the first two maps.",
+        "source": "Cinder is not dropped yet.",
         "use": "Nothing you can make on this march spends Cinder.",
     },
     "void": {
         "name": "Void",
-        "source": "Void is not dropped on the first two maps.",
+        "source": "Void is not dropped yet.",
         "use": "Nothing you can make on this march spends Void.",
     },
 }
@@ -293,6 +326,19 @@ BODIES = {
         "start_weapon": "traveler_dagger",
         "skills": (("thunder", 1), ("blind", 10)),
     },
+    "gun_chief": {
+        "name": "Gun-Chief",
+        "family": "gun",
+        "mov": 4,
+        "hp": 22,
+        "sp": 16,
+        "atk": 7,
+        "defn": 3,
+        "growth": (2, 1, 1, 0),
+        "start_weapon": "clan_gun",
+        "pitch": "Shoots a straight line. A person in the way stops it.",
+        "skills": (("shot_2", 1), ("shot_3", 10), ("salvo_8", 20)),
+    },
 }
 
 ENEMIES = {
@@ -321,6 +367,19 @@ ENEMIES = {
         "skills": ["line_3"],
         "stone": "bone",
         "exp": 50,
+    },
+    "gunner": {
+        "name": "Gunner",
+        "family": "gun",
+        "sprite": "gunner",
+        "hp": 14,
+        "sp": 0,
+        "atk": 7,
+        "defn": 2,
+        "mov": 4,
+        "skills": [],
+        "stone": "ash",
+        "exp": 45,
     },
 }
 
@@ -353,6 +412,20 @@ def cedar_rows() -> list[str]:
                 chars.append("2")
         rows.append("".join(chars))
     return rows
+
+
+def town_rows() -> list[str]:
+    return ["0" * 12 for _ in range(12)]
+
+
+def town_blocked() -> list[tuple[int, int]]:
+    blocked = []
+    for y in range(12):
+        if y in (4, 9):
+            continue
+        for x in (0, 1, 4, 5, 6, 7, 10, 11):
+            blocked.append((x, y))
+    return blocked
 
 
 EPISODES = [
@@ -416,7 +489,37 @@ EPISODES = [
         "outro": [
             ("Swallow", "The next town is already full of guns. I am coming with you. Call me Swallow."),
             ("Kairo", "Then walk behind the spears until the pass is behind us."),
-            ("Narrator", "The cedar pass is quiet. This first march ends here. You can walk these fights again."),
+            ("Narrator", "The cedar pass is quiet. The gun town is the next road."),
+        ],
+    },
+    {
+        "id": 3,
+        "name": "Gun-Clan Town",
+        "place": "Gun-clan town",
+        "theme": "town",
+        "heights": town_rows(),
+        "blocked": town_blocked(),
+        "slots": [(2, 11), (3, 11), (8, 11), (9, 11), (2, 10), (8, 10)],
+        "must": ["kairo"],
+        "recruit_before": ["gun_chief"],
+        "recruit_after": [],
+        "enemies": [
+            {"kind": "gunner", "pos": (2, 1)},
+            {"kind": "gunner", "pos": (9, 1)},
+            {"kind": "gunner", "pos": (3, 3)},
+            {"kind": "pawn", "pos": (8, 6)},
+            {"kind": "pawn", "pos": (3, 7)},
+        ],
+        "reinforcements": [],
+        "intro": [
+            ("Gun-Chief", "I am Gun-Chief. Their guns hold the two streets. A shot travels in a straight line, and it stops if someone stands in it."),
+            ("Kairo", "Then you take a lane. We will not stand in your shot."),
+            ("Swallow", "I can run the alleys. Call the shot before you fire."),
+        ],
+        "outro": [
+            ("Gun-Chief", "The clan will not hold this town again. The gun stays with me."),
+            ("Kairo", "Then take the back of the line."),
+            ("Narrator", "The gun town is quiet. You can walk it again."),
         ],
     },
 ]

@@ -400,6 +400,11 @@ class Battle:
                 gids.append(tgt.gid)
                 tiles.add(tgt.pos)
             ok = bool(gids)
+        elif kind == "salvo":
+            for tgt in self.bolt_targets(unit, pos, skill.get("length", 5)):
+                gids.append(tgt.gid)
+                tiles.add(tgt.pos)
+            ok = bool(gids)
         elif kind == "bolt":
             for tgt in self.bolt_targets(unit, pos, skill["length"]):
                 gids.append(tgt.gid)
@@ -457,7 +462,7 @@ class Battle:
                 if direction not in ORTHO or not self.line_targets(unit, unit.pos, direction, skill["length"]):
                     return False, "Nobody is standing on that line."
                 return True, ""
-            if skill["kind"] in ("heal", "multi", "bolt", "mode_target"):
+            if skill["kind"] in ("heal", "multi", "bolt", "mode_target", "salvo"):
                 if action.get("target") not in opts["gids"]:
                     return False, "Choose a valid target."
                 return True, ""
@@ -668,7 +673,7 @@ class Battle:
                     if tgt.gid not in seen:
                         seen.append(tgt.gid)
             return self._hit_many(unit, [self.unit_by_gid(gid) for gid in seen])
-        if kind == "multi":
+        if kind in ("multi", "salvo"):
             target = self.unit_by_gid(action["target"])
             unit.facing = facing_toward(unit.pos, target.pos)
             events = []

@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from ashgauntlet.campaign import Save, materialize, new_game
-from ashgauntlet.data import craft_line, gear_bonus, raise_line
+from ashgauntlet.data import craft_line, gear_bonus, next_enhance_cost, raise_line
 
 
 class CampaignTests(unittest.TestCase):
@@ -60,6 +60,18 @@ class CampaignTests(unittest.TestCase):
         choices = [g.kind for g in save.gear_choices("shio", "weapon")]
         self.assertNotIn("ash_blade", choices)
         self.assertNotIn("village_sword", choices)
+
+        save.prepare_episode(3)
+        chief = materialize(save, "gun_chief", (2, 10))
+        self.assertEqual(chief.weapon_family, "gun")
+        self.assertIn("shot_2", chief.skills)
+        self.assertNotIn("shot_3", chief.skills)
+        self.assertEqual(chief.max_hp, 22)
+        self.assertEqual(next_enhance_cost("clan_gun", 0), 300)
+        self.assertEqual(gear_bonus("clan_gun", 1), 2)
+        sword_choices = [g.kind for g in save.gear_choices("gun_chief", "weapon")]
+        self.assertEqual(sword_choices, ["clan_gun"])
+        self.assertNotIn("clan_gun", [g.kind for g in save.gear_choices("kairo", "weapon")])
 
 
 if __name__ == "__main__":

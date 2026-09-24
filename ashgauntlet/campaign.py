@@ -1,4 +1,4 @@
-"""Party, workshop, and the two fights in v0.0.1."""
+"""Party, workshop, and the fights on the road."""
 
 from __future__ import annotations
 
@@ -217,7 +217,7 @@ class Save:
             notes.append(
                 "Stones kept: "
                 + ", ".join(names)
-                + ". Stones make a new piece in the workshop. Pawns drop Ash. Spear fighters drop Bone."
+                + ". Stones make a new piece in the workshop. Pawns drop Ash. Gunners drop Ash too. Spear fighters drop Bone."
             )
         return notes
 

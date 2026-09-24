@@ -10,13 +10,16 @@ RANGE_LINE = {
     "dagger": "A dagger strikes the next tile only.",
     "axe": "An axe strikes the next tile only.",
     "spear": "A spear strikes one or two tiles in a straight line, not diagonally. An enemy on the near tile blocks the farther one.",
+    "gun": "A gun shoots in a straight line, up to 5 tiles, including a diagonal. A person or a two-step height gap in the way stops the shot. It hits less often than a sword, and it cannot set Issen.",
+    "bow": "A bow shoots in a straight line, up to 5 tiles, including a diagonal. A person or a two-step height gap in the way stops the shot. It hits less often than a sword, and it cannot set Issen.",
 }
 
 
 def workshop_intro() -> list[str]:
     return [
-        "Ash and Bone are stones, not money. Pawns drop Ash. Spear fighters (Bushi) drop Bone.",
-        "Cinder and Void do not drop on these two maps, and nothing here spends them.",
+        "Ash and Bone are stones, not money. Pawns drop Ash. Gunners drop Ash too. Spear fighters (Bushi) drop Bone.",
+        "Cinder and Void are not dropped yet, and nothing here spends them.",
+        "A Clan Gun shoots a straight line and is raised with souls. It cannot set Issen.",
         "Recipes spend stones and make a new piece. A click asks you to continue or cancel before anything is spent.",
         "Souls only raise a piece you already own. Souls cannot buy stones.",
         "Point at Souls, a stone, a recipe, or a piece. This box reads the attack, defense, and the next upgrade.",
@@ -48,7 +51,7 @@ def soul_lines(souls: int) -> list[str]:
         f"You have {souls} souls.",
         "Souls are kept after a win. They are not coins, and they are not stones.",
         "They only raise a piece you already own. Making a new piece spends stones instead.",
-        "A sword's first raise costs 200 souls. A coat's first raise costs 150 souls.",
+        "A sword's first raise costs 200 souls. A coat's first raise costs 150 souls. A Clan Gun's first raise costs 300 souls.",
         "A light sword gains half the attack of a Village Sword or an Ash Blade.",
         "Point at a piece on the right to see the exact cost and the new bonus.",
     ]
@@ -196,8 +199,8 @@ def issen_lines() -> list[str]:
         "Issen spends the action. You may step first, but you do not attack on that turn.",
         "It lasts until this fighter's next turn, or until it answers someone.",
         "The next enemy who swings from the next tile with a sword, light sword, dagger, axe, or spear misses and falls.",
-        "A spear from two tiles away does not count. Skills do not count.",
-        "That attacker is worth four times the souls. A lord would ignore Issen. These two maps have no lord.",
+        "A spear from two tiles away does not count. A gun does not count. Skills do not count.",
+        "That attacker is worth four times the souls. A lord would ignore Issen. These maps have no lord.",
     ]
 
 

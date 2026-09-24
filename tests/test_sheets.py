@@ -77,6 +77,15 @@ class SheetTests(unittest.TestCase):
         self.assertIn("cannot be raised", dagger)
         self.assertIn("Only Swallow", dagger)
 
+        gun = joined(gear_lines("clan_gun", 0, "Gun-Chief", souls=200))
+        self.assertIn("Clan Gun +0", gun)
+        self.assertIn("300 souls", gun)
+        self.assertIn("becomes +2", gun)
+        self.assertIn("button stays dark", gun)
+        self.assertIn("Only Gun-Chief", gun)
+        self.assertIn("5 tiles", gun)
+        self.assertIn("cannot set Issen", gun)
+
     def test_recipe_names_the_stones(self):
         text = joined(recipe_lines("ash_blade", {"ash": 1}, False))
         self.assertIn("3 Ash", text)

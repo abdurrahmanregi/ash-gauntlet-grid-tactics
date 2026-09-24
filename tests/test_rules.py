@@ -205,7 +205,7 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(battle.preview_damage(hero, foe), 6)
 
     def test_maps_and_reinforcement(self):
-        for episode_id in (1, 2):
+        for episode_id in (1, 2, 3):
             ep = episode(episode_id)
             from ashgauntlet.data import grid_from_rows
 
@@ -246,6 +246,49 @@ class RuleTests(unittest.TestCase):
         battle = build_battle(save, 2, order, default_items(save, order), random.Random(2))
         outcome = play(battle)
         self.assertEqual(outcome, "win", "\n".join(battle.log[-30:]))
+
+        save.finish_victory(2, battle)
+        save.prepare_episode(3)
+        ep = episode(3)
+        order = default_order(save, ep)
+        self.assertIn("gun_chief", order)
+        battle = build_battle(save, 3, order, default_items(save, order), random.Random(3))
+        outcome = play(battle)
+        self.assertEqual(outcome, "win", "\n".join(battle.log[-30:]))
+
+    def test_gun_line_and_salvo(self):
+        shooter = fighter(id="g", name="Gun", pos=(0, 0), weapon_family="gun", atk=7, defn=2, skills=["shot_2"], sp=16, max_sp=16)
+        far = fighter(id="e", name="Far", side="enemy", pos=(0, 5), hp=40, max_hp=40, defn=0, atk=1)
+        battle = make([shooter, far], w=8, h=8)
+        self.assertEqual([u.id for u in battle.attack_targets(shooter, shooter.pos)], ["e"])
+        ok, _reason = battle.action_legal(shooter, {"type": "issen"})
+        self.assertFalse(ok)
+
+        too_far = fighter(id="z", name="Farther", side="enemy", pos=(0, 6), hp=20, max_hp=20, defn=0)
+        battle = make([shooter, too_far], w=8, h=8)
+        self.assertEqual(battle.attack_targets(shooter, shooter.pos), [])
+
+        diag = fighter(id="d", name="Diag", side="enemy", pos=(3, 3), hp=20, max_hp=20, defn=0)
+        battle = make([shooter, diag], w=8, h=8)
+        self.assertEqual([u.id for u in battle.attack_targets(shooter, shooter.pos)], ["d"])
+
+        blocker = fighter(id="b", name="Block", side="enemy", pos=(0, 2), hp=20, max_hp=20, defn=0)
+        blocked = make([shooter, blocker, far], w=8, h=8)
+        reached = {u.id for u in blocked.attack_targets(shooter, shooter.pos)}
+        self.assertEqual(reached, {"b"})
+
+        gapped = make([shooter, far], w=8, h=8, heights={(0, 2): 2})
+        self.assertEqual(gapped.attack_targets(shooter, shooter.pos), [])
+
+        live = fighter(id="g", name="Gun", pos=(0, 0), weapon_family="gun", atk=7, skills=["shot_2"], sp=16, max_sp=16)
+        foe = fighter(id="e", name="Far", side="enemy", pos=(0, 4), hp=30, max_hp=30, defn=0, atk=1)
+        battle = make([live, foe], w=8, h=8)
+        events, err = battle.player_act(live.gid, live.pos, {"type": "skill", "skill": "shot_2", "target": foe.gid})
+        self.assertIsNone(err)
+        self.assertEqual(live.sp, 2)
+        hits = [event for event in events if event.get("t") == "hit" and not event.get("miss")]
+        self.assertEqual(len(hits), 2)
+        self.assertEqual(foe.hp, 16)
 
 
 if __name__ == "__main__":

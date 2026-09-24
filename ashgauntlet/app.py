@@ -20,6 +20,7 @@ from ashgauntlet.data import (
     EPISODES,
     GEAR,
     ISSEN_FAMILIES,
+    LINE_FAMILIES,
     RECIPES,
     SKILLS,
     STONES,
@@ -64,6 +65,11 @@ CEDAR = {
     1: ((108, 94, 68), (74, 64, 46), (90, 78, 56)),
     2: ((148, 144, 134), (98, 96, 90), (122, 118, 110)),
 }
+TOWN = {
+    0: ((118, 104, 86), (78, 68, 56), (96, 84, 70)),
+    1: ((150, 132, 108), (104, 90, 72), (126, 110, 90)),
+    2: ((168, 154, 132), (116, 104, 88), (142, 128, 108)),
+}
 def closest_diamond(mx, my, diamonds):
     """Return the tile whose ground diamond contains the point.
 
@@ -88,8 +94,10 @@ FALLBACK_COLORS = {
     "sword_two": (108, 128, 158),
     "spear_one": (86, 138, 92),
     "swallow": (64, 148, 146),
+    "gun_chief": (196, 112, 64),
     "pawn": (132, 102, 172),
     "bushi": (96, 70, 150),
+    "gunner": (120, 86, 168),
 }
 SPEAKER_SPRITE = {
     "Kairo": "kairo",
@@ -97,6 +105,7 @@ SPEAKER_SPRITE = {
     "Sword-Two": "sword_two",
     "Spear-One": "spear_one",
     "Swallow": "swallow",
+    "Gun-Chief": "gun_chief",
 }
 
 
@@ -397,7 +406,7 @@ class Game:
         self.canvas.blit(sub, (460, 214))
         blurb = "Aim the diamond at their feet. Overlapping pictures do not take the click."
         self.canvas.blit(self.font.render(blurb, True, MUTED), (460, 280))
-        self.canvas.blit(self.font_sm.render("v0.0.1  ·  the first march", True, MUTED), (460, 314))
+        self.canvas.blit(self.font_sm.render("v0.0.2  ·  the gun town", True, MUTED), (460, 314))
         label = "Erase the saved march?" if self.confirm_new else "Begin the march"
         y = 380
         self.add_button((460, y, 320, 52), label, self.begin)
@@ -414,11 +423,11 @@ class Game:
         lines = [
             "1. A bright diamond follows the pointer. That diamond is the tile you use.",
             "2. Point it at a fighter's feet. The right side reads health, skill points, attack, defense, move, skills, and experience. Click one of yours to give orders.",
-            "3. Red diamonds can be struck. Click the diamond on that enemy's tile, not the picture covering it. Point at them first if you want their numbers.",
+            "3. Red diamonds can be struck. Click the diamond on that enemy's tile, not the picture covering it. A gun's line is straight, up to 5 tiles, and a person in the way stops the shot.",
             "4. The buttons on the right are skills, herbs, Issen, and Wait. Point at a button to read it. Heal works on that fighter or on a friend on the next tile. A herb does too.",
             "5. Issen means you only step and set it. The next sword, spear, or axe that swings from the next tile misses, and the attacker falls.",
             "6. Low, mid, and high ground are drawn as steps. A two-step gap blocks walking and striking.",
-            "7. Ash and Bone are stones, not money. Pawns drop Ash. Spear fighters drop Bone. Stones make a new piece. Souls only raise a piece you already own. Point at either one in the workshop.",
+            "7. Ash and Bone are stones, not money. Pawns and gunners drop Ash. Spear fighters drop Bone. Stones make a new piece. Souls only raise a piece you already own. A Clan Gun's first raise costs 300 souls.",
             "8. If Kairo falls, the fight is lost. On the first map, Shio is the same once she arrives.",
         ]
         y = 120
@@ -502,23 +511,25 @@ class Game:
         )
         if self.toast_t > 0:
             self.canvas.blit(self.font_sm.render(self.toast, True, GOLD), (340, 36))
-        self.canvas.blit(self.font_b.render("Going", True, ORANGE), (40, 120))
-        y = 160
+        self.canvas.blit(self.font_b.render("Going", True, ORANGE), (40, 112))
+        y = 148
         for index, body_id in enumerate(self.order):
             self._deploy_row(body_id, index, y, going=True)
-            y += 58
-        self.canvas.blit(self.font_b.render("Staying back", True, MUTED), (40, y + 8))
-        y += 48
-        for body_id in self.save.roster:
-            if body_id in self.order:
-                continue
-            self.add_button(
-                (40, y, 220, 40),
-                BODIES[body_id]["name"],
-                lambda b=body_id: self.add_deploy(b),
-                info=body_card(self.save, body_id),
-            )
-            y += 48
+            y += 46
+        benched = [body_id for body_id in self.save.roster if body_id not in self.order]
+        if benched and y < 456:
+            self.canvas.blit(self.font_b.render("Staying back", True, MUTED), (40, y + 2))
+            y += 32
+            for body_id in benched:
+                if y > 444:
+                    break
+                self.add_button(
+                    (40, y, 220, 40),
+                    BODIES[body_id]["name"],
+                    lambda b=body_id: self.add_deploy(b),
+                    info=body_card(self.save, body_id),
+                )
+                y += 44
         self._draw_kit(ep)
         self.add_button((900, 650, 340, 48), "Start the fight", self.start_battle)
         lines = self.info_at(pygame.mouse.get_pos())
@@ -530,13 +541,13 @@ class Game:
     def _deploy_row(self, body_id, index, y, going):
         name = BODIES[body_id]["name"]
         locked = body_id in episode(self.ep_id)["must"]
-        self.add_button((40, y, 210, 44), name, lambda b=body_id: self.focus(b), info=body_card(self.save, body_id))
+        self.add_button((40, y, 210, 40), name, lambda b=body_id: self.focus(b), info=body_card(self.save, body_id))
         if index > 0:
-            self.add_button((260, y, 64, 44), "Up", lambda i=index: self.move_order(i, -1))
+            self.add_button((260, y, 64, 40), "Up", lambda i=index: self.move_order(i, -1))
         if index < len(self.order) - 1:
-            self.add_button((332, y, 80, 44), "Down", lambda i=index: self.move_order(i, 1))
+            self.add_button((332, y, 80, 40), "Down", lambda i=index: self.move_order(i, 1))
         if not locked:
-            self.add_button((420, y, 90, 44), "Bench", lambda b=body_id: self.bench(b))
+            self.add_button((420, y, 90, 40), "Bench", lambda b=body_id: self.bench(b))
 
     def focus(self, body_id):
         self.deploy_focus = body_id
@@ -576,6 +587,9 @@ class Game:
         self.canvas.blit(portrait, (840, 40))
         self.canvas.blit(self.font_b.render(body["name"], True, ORANGE), (900, 36))
         self.canvas.blit(self.font_sm.render(body["family"].replace("_", " "), True, MUTED), (900, 64))
+        pitch = body.get("pitch")
+        if pitch:
+            blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, pitch, 320), MUTED, 900, 86, 1)
         y = 112
         for line in block["summary"]:
             if y > 268:
@@ -900,8 +914,8 @@ class Game:
 
     def draw_world(self):
         self.canvas.blit(self.font_lg.render("The road", True, TEXT), (60, 36))
-        if self.save.next_episode > 2:
-            banner = "The first march is done. You can walk these fights again."
+        if self.save.next_episode > EPISODES[-1]["id"]:
+            banner = "This part of the road is done. You can walk these fights again."
         elif self.save.cleared:
             banner = "The next fight is open. The ones behind you can be walked again."
         else:
@@ -912,7 +926,7 @@ class Game:
             bone = self.save.stones.get("bone", 0)
             held = (
                 f"You hold {self.save.souls} souls, {ash} Ash, {bone} Bone. "
-                "Pawns drop Ash. Spear fighters drop Bone. Stones make gear. Souls only raise it."
+                "Pawns and gunners drop Ash. Spear fighters drop Bone. Stones make gear. Souls only raise it."
             )
             blit_lines(self.canvas, self.font_sm, wrap(self.font_sm, held, 1100), TEXT, 60, 132, 2)
         for index, ep in enumerate(EPISODES):
@@ -1060,7 +1074,10 @@ class Game:
             preview = unit.pos
         legal = {target.gid for target in self.battle.attack_targets(unit, preview)}
         if enemy.gid not in legal:
-            self.say("Too far from that tile, or the height blocks it.")
+            if unit.weapon_family in LINE_FAMILIES:
+                self.say("That shot needs a clear straight line, up to 5 tiles. A person in the way stops it.")
+            else:
+                self.say("Too far from that tile, or the height blocks it.")
             return
         self.act(preview, {"type": "attack", "target": enemy.gid})
 
@@ -1211,13 +1228,20 @@ class Game:
 
     def draw_map(self):
         battle = self.battle
-        palette = CEDAR if battle.theme == "cedar" else VILLAGE
+        if battle.theme == "cedar":
+            palette = CEDAR
+        elif battle.theme == "town":
+            palette = TOWN
+        else:
+            palette = VILLAGE
         for x, y in self.cells():
             top, lift, cx, cy = self.tile_poly(x, y)
             height = battle.height((x, y))
             top_c, left_c, right_c = palette[min(height, 2)]
             blocked = (x, y) in battle.blocked
-            if blocked:
+            if blocked and battle.theme == "town":
+                top_c, left_c, right_c = (62, 52, 44), (42, 36, 30), (52, 44, 36)
+            elif blocked:
                 top_c = tuple(max(0, c - 28) for c in top_c)
             if lift:
                 left = [(cx - HW, cy - lift), (cx, cy + HH - lift), (cx, cy + HH), (cx - HW, cy)]
@@ -1226,7 +1250,7 @@ class Game:
                 pygame.draw.polygon(self.canvas, right_c, right)
             pygame.draw.polygon(self.canvas, top_c, top)
             pygame.draw.polygon(self.canvas, (28, 22, 18), top, 1)
-            if blocked and height == 0:
+            if blocked and height == 0 and battle.theme != "town":
                 prop = self.assets.props.get("house" if (x + y) % 2 == 0 else "tree")
                 if prop:
                     self.canvas.blit(prop, prop.get_rect(midbottom=(cx, cy - lift + 8)))
